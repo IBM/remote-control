@@ -1,0 +1,41 @@
+package api
+
+import (
+	"log"
+	"net/http"
+	"runtime/debug"
+	"time"
+)
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// loggingMiddleware logs each request method, path, status, and duration.
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		log.Printf("%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start))
+	})
+}
+
+// recoveryMiddleware catches panics and returns a 500 response.
+func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("PANIC: %v\n%s", rec, debug.Stack())
+				writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
