@@ -2,10 +2,13 @@ package tlsconfig
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"time"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
+
+var ch = alog.UseChannel("CLIENT")
 
 const certExpiryWarnThreshold = 30 * 24 * time.Hour
 
@@ -24,9 +27,9 @@ func CheckCertExpiry(label, certFile string) {
 	}
 	until := time.Until(expiry)
 	if until <= 0 {
-		log.Printf("[remote-control] WARNING: %s has EXPIRED (%s)", label, certFile)
+		ch.Log(alog.WARNING, "[remote-control] WARNING: %s has EXPIRED (%s)", label, certFile)
 	} else if until < certExpiryWarnThreshold {
-		log.Printf("[remote-control] WARNING: %s expires in %s (%s)", label, formatDuration(until), certFile)
+		ch.Log(alog.WARNING, "[remote-control] WARNING: %s expires in %s (%s)", label, formatDuration(until), certFile)
 	}
 }
 

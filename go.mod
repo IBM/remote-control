@@ -3,6 +3,7 @@ module github.com/gabe-l-hart/remote-control
 go 1.22
 
 require (
+	github.com/IBM/alchemy-logging/src/go v1.0.3
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 )

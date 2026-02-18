@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,9 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
+
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
 )
+
+var ch = alog.UseChannel("HOST")
 
 // Host manages the subprocess lifecycle and I/O proxying.
 type Host struct {
@@ -48,7 +51,7 @@ func buildHTTPClient(cfg *config.Config) *http.Client {
 		cfg.ClientTLS.TrustedCAFile,
 	)
 	if err != nil {
-		log.Printf("[remote-control] TLS config error: %v; falling back to plain HTTP", err)
+		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
 		return &http.Client{Timeout: 30 * time.Second}
 	}
 	return &http.Client{
@@ -156,7 +159,7 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			log.Printf("[remote-control] subprocess wait error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] subprocess wait error: %v", err)
 		}
 	}
 
@@ -166,7 +169,7 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 
 	// Mark the session complete.
 	if err := h.client.CompleteSession(sessionID, exitCode); err != nil {
-		log.Printf("[remote-control] complete session error: %v", err)
+		ch.Log(alog.WARNING, "[remote-control] complete session error: %v", err)
 	}
 	h.writeSideChannel("[remote-control] Session complete (exit %d)\n", exitCode)
 	return nil
@@ -207,7 +210,7 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string) {
 			}
 			clients, err := h.client.ListPendingClients(sessionID)
 			if err != nil {
-				log.Printf("[remote-control] list pending clients error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] list pending clients error: %v", err)
 				continue
 			}
 			for _, client := range clients {
@@ -224,26 +227,26 @@ func (h *Host) handleClientApproval(sessionID, clientID, commonName string) {
 
 	line, err := h.readSideChannelLine()
 	if err != nil {
-		log.Printf("[remote-control] read approval response error: %v", err)
+		ch.Log(alog.WARNING, "[remote-control] read approval response error: %v", err)
 		return
 	}
 
 	switch string([]byte(line)[0]) {
 	case "a", "A":
 		if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
-			log.Printf("[remote-control] approve client error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
 		} else {
 			h.writeSideChannel("[remote-control] Client %q approved (read-write)\n", commonName)
 		}
 	case "r", "R":
 		if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
-			log.Printf("[remote-control] approve client error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
 		} else {
 			h.writeSideChannel("[remote-control] Client %q approved (read-only)\n", commonName)
 		}
 	default:
 		if err := h.client.DenyClient(sessionID, clientID); err != nil {
-			log.Printf("[remote-control] deny client error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] deny client error: %v", err)
 		} else {
 			h.writeSideChannel("[remote-control] Client %q denied\n", commonName)
 		}

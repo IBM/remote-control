@@ -5,9 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"time"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
 
 // inputReader reads stdin from the user and submits entries to the server.
@@ -49,7 +50,7 @@ func (ir *inputReader) run(ctx context.Context) {
 			if errors.Is(err, ErrForbidden) {
 				fmt.Fprintf(os.Stderr, "[remote-control] stdin not permitted (read-only or not approved)\n")
 			} else {
-				log.Printf("[remote-control] enqueue stdin error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] enqueue stdin error: %v", err)
 			}
 			continue
 		}

@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
-	"log"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
 
 // syncWriter wraps an io.Writer with a mutex so concurrent writes are safe.
@@ -45,7 +46,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 
 			// Write to local terminal.
 			if _, werr := dst.Write(chunk); werr != nil {
-				log.Printf("[remote-control] local %s write error: %v", stream, werr)
+				ch.Log(alog.WARNING, "[remote-control] local %s write error: %v", stream, werr)
 			}
 
 			// Forward to server (non-blocking on context cancel).
@@ -55,7 +56,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 					return
 				default:
 					if serr := client.AppendOutput(sessionID, stream, chunk, ts); serr != nil {
-						log.Printf("[remote-control] append output error: %v", serr)
+						ch.Log(alog.WARNING, "[remote-control] append output error: %v", serr)
 						// TODO Phase 10: buffer locally and retry
 					}
 				}
@@ -63,7 +64,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 		}
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("[remote-control] %s pipe read error: %v", stream, err)
+				ch.Log(alog.WARNING, "[remote-control] %s pipe read error: %v", stream, err)
 			}
 			return
 		}
@@ -109,13 +110,13 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 
 		// Write to subprocess stdin pipe.
 		if _, err := stdinPipe.Write(lineWithNewline); err != nil {
-			log.Printf("[remote-control] subprocess stdin write error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
 			return
 		}
 
 		// Reject all pending client stdin (host wins).
 		if err := client.RejectAllPending(sessionID); err != nil {
-			log.Printf("[remote-control] reject-all error: %v", err)
+			ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
 		}
 
 		select {
@@ -139,7 +140,7 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 		case <-ticker.C:
 			entry, err := client.PeekStdin(sessionID)
 			if err != nil {
-				log.Printf("[remote-control] peek stdin error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] peek stdin error: %v", err)
 				continue
 			}
 			if entry == nil {
@@ -155,12 +156,12 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 
 			// Accept first (sets host-grounded timestamp on server), then write.
 			if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
-				log.Printf("[remote-control] accept stdin error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] accept stdin error: %v", err)
 				continue
 			}
 
 			if _, err := stdinPipe.Write(data); err != nil {
-				log.Printf("[remote-control] subprocess stdin write error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
 				return
 			}
 		}

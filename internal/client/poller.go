@@ -2,9 +2,10 @@ package client
 
 import (
 	"context"
-	"log"
 	"sort"
 	"time"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
 
 const (
@@ -38,7 +39,7 @@ func (p *poller) run(ctx context.Context) {
 			return
 		case <-time.After(p.interval):
 			if err := p.poll(); err != nil {
-				log.Printf("[remote-control] poll error: %v", err)
+				ch.Log(alog.WARNING, "[remote-control] poll error: %v", err)
 				p.backoff()
 			} else {
 				p.interval = pollInitialInterval

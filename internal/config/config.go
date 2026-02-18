@@ -2,10 +2,20 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
+
+// LoggingConfig holds the key configuration elements for logging
+type LoggingConfig struct {
+	DefaultLevel string `json:"default_level"`
+	Filters      string `json:"filters"`
+	Json         bool   `json:"json"`
+}
 
 // TLSBundle holds TLS certificate configuration for one side of a connection.
 type TLSBundle struct {
@@ -26,6 +36,8 @@ type Config struct {
 	RequireApproval   bool   `json:"require_approval"`
 	DefaultPermission string `json:"default_permission"`
 	PollIntervalMs    int    `json:"poll_interval_ms"`
+
+	Log LoggingConfig `json:"log"`
 }
 
 func defaults() *Config {
@@ -37,6 +49,11 @@ func defaults() *Config {
 		RequireApproval:   true,
 		DefaultPermission: "read-write",
 		PollIntervalMs:    500,
+		Log: LoggingConfig{
+			DefaultLevel: "info",
+			Filters:      "",
+			Json:         false,
+		},
 	}
 }
 
@@ -71,7 +88,20 @@ func readConfigFile(cfg *Config) error {
 	return json.Unmarshal(data, cfg)
 }
 
-func applyEnvOverrides(cfg *Config) {
+func strToBool(s string) (bool, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	switch s {
+	case "true", "1":
+		return true, nil
+	case "false", "0", "":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value: %s", s)
+	}
+}
+
+func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("REMOTE_CONTROL_SERVER_URL"); v != "" {
 		cfg.ServerURL = v
 	}
@@ -93,6 +123,20 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("REMOTE_CONTROL_CLIENT_CA"); v != "" {
 		cfg.ClientTLS.TrustedCAFile = v
 	}
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		cfg.Log.DefaultLevel = v
+	}
+	if v := os.Getenv("LOG_FILTERS"); v != "" {
+		cfg.Log.Filters = v
+	}
+	if v := os.Getenv("LOG_JSON"); v != "" {
+		if val, err := strToBool(v); nil != err {
+			return err
+		} else {
+			cfg.Log.Json = val
+		}
+	}
+	return nil
 }
 
 func applyCLIOverrides(cfg *Config, overrides map[string]string) {
@@ -119,6 +163,21 @@ func applyCLIOverrides(cfg *Config, overrides map[string]string) {
 	}
 }
 
+func configureLogging(cfg *Config) error {
+	if chanMap, err := alog.ParseChannelFilter(cfg.Log.Filters); nil != err {
+		return err
+	} else if level, err := alog.LevelFromString(cfg.Log.DefaultLevel); nil != err {
+		return err
+	} else {
+		alog.Config(level, chanMap)
+		alog.EnableGID()
+		if cfg.Log.Json {
+			alog.UseJSONLogFormatter()
+		}
+	}
+	return nil
+}
+
 // Load loads the configuration applying the full priority chain:
 //  1. Defaults
 //  2. REMOTE_CONTROL_HOME (sets ConfigDir)
@@ -131,14 +190,17 @@ func Load(cliOverrides map[string]string) (*Config, error) {
 	if h := os.Getenv("REMOTE_CONTROL_HOME"); h != "" {
 		cfg.ConfigDir = expandTilde(h)
 	}
-
 	if err := readConfigFile(cfg); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	applyEnvOverrides(cfg)
+	if err := applyEnvOverrides(cfg); nil != err {
+		return nil, err
+	}
 	applyCLIOverrides(cfg, cliOverrides)
 	expandTildePaths(cfg)
+	if err := configureLogging(cfg); nil != err {
+		return nil, err
+	}
 
 	return cfg, nil
 }

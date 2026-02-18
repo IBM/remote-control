@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
 	"github.com/gabe-l-hart/remote-control/internal/api"
@@ -19,6 +19,8 @@ import (
 	"github.com/gabe-l-hart/remote-control/internal/session"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
 )
+
+var ch = alog.UseChannel("SERVER")
 
 var (
 	serverAddr         string
@@ -60,18 +62,18 @@ func runServer(cmd *cobra.Command, args []string) error {
 	tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
 
 	srv := api.NewServer(serverAddr, store, cfg)
-	log.Printf("[remote-control] server listening on %s", serverAddr)
+	ch.Log(alog.INFO, "[remote-control] server listening on %s", serverAddr)
 
 	// Graceful shutdown on SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigCh
-		log.Printf("[remote-control] shutting down...")
+		ch.Log(alog.INFO, "[remote-control] shutting down...")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("[remote-control] shutdown error: %v", err)
+			ch.Log(alog.INFO, "[remote-control] shutdown error: %v", err)
 		}
 	}()
 

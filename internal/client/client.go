@@ -3,16 +3,18 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"sort"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
 	"github.com/google/uuid"
 )
+
+var ch = alog.UseChannel("CLIENT")
 
 // Client manages connecting to a remote session and streaming I/O.
 type Client struct {
@@ -42,7 +44,7 @@ func buildHTTPClient(cfg *config.Config) *http.Client {
 		cfg.ClientTLS.TrustedCAFile,
 	)
 	if err != nil {
-		log.Printf("[remote-control] TLS config error: %v; falling back to plain HTTP", err)
+		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
 		return &http.Client{Timeout: 30 * time.Second}
 	}
 	return &http.Client{
