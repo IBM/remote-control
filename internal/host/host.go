@@ -1,7 +1,6 @@
 package host
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -9,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	"github.com/creack/pty"
+	"golang.org/x/term"
 
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
@@ -26,9 +28,12 @@ type Host struct {
 	cfg    *config.Config
 	client *APIClient
 
-	// Side-channel: pause proxyLocalStdin when a host prompt needs os.Stdin.
-	sideChannelMu     sync.Mutex
-	sideChannelActive bool
+	// Channel-based approval routing (replaces sideChannelMu/sideChannelActive).
+	// No mutex is held during I/O — eliminates the deadlock present in the
+	// previous sideChannel design.
+	approvalMu     sync.Mutex
+	approvalActive bool
+	approvalRespCh chan byte // nil when not active
 }
 
 // NewHost creates a Host from the given config.
@@ -70,25 +75,139 @@ func buildHTTPClientTLS(tlsCfg *tls.Config) *http.Client {
 
 // Run starts the subprocess specified by command, creates a server session,
 // proxies all I/O, and waits for the process to exit.
+//
+// PTY mode is used when os.Stdin is a real TTY (interactive terminal), giving
+// the subprocess a proper controlling terminal with PS1, colors, and readline.
+// Pipe mode is used otherwise (tests, CI, scripts) and preserves existing behavior.
 func (h *Host) Run(ctx context.Context, command []string) error {
-	// Create a session on the server.
 	sessionID, err := h.client.CreateSession(command)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	h.writeSideChannel("[remote-control] Session ID: %s\n", sessionID)
 
-	// Set up cancellable context for the subprocess and all proxy goroutines.
-	// This must be created before exec.CommandContext so cancellation can kill
-	// the subprocess (exec kills the process when its context is done).
 	proxyCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Start the subprocess.
-	cmd := exec.CommandContext(proxyCtx, command[0], command[1:]...)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		return h.runPTY(proxyCtx, cancel, command, sessionID)
+	}
+	return h.runPipe(proxyCtx, cancel, command, sessionID)
+}
+
+// runPTY runs the subprocess with a PTY, giving it a proper controlling terminal.
+// The host terminal is put into raw mode and SIGWINCH is forwarded for resize support.
+func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []string, sessionID string) error {
+	h.writeSideChannel(false, "[remote-control] Session ID: %s\n", sessionID)
+
+	// Use exec.Command (not CommandContext) — PTY lifecycle is managed manually.
+	// Do NOT set SysProcAttr here: pty.Start sets Setsid/Setctty/Ctty itself,
+	// and pre-setting SysProcAttr (e.g. Setpgid) conflicts with that on macOS,
+	// causing EPERM. After Setsid, pgid==pid so Kill(-pid,sig) still works.
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.WaitDelay = 3 * time.Second
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return fmt.Errorf("pty start: %w", err)
+	}
+	defer ptmx.Close()
+
+	// Set PTY size to match host terminal.
+	cols, rows, _ := term.GetSize(int(os.Stdin.Fd()))
+	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+
+	// Put host terminal in raw mode so the subprocess sees a real TTY.
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return fmt.Errorf("make raw: %w", err)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck
+
+	var ptmxMu sync.Mutex
+
+	// Handle SIGWINCH — resize the PTY when the host terminal changes size.
+	sigWinchCh := make(chan os.Signal, 1)
+	signal.Notify(sigWinchCh, syscall.SIGWINCH)
+	defer signal.Stop(sigWinchCh)
+	go func() {
+		for range sigWinchCh {
+			cols, rows, _ := term.GetSize(int(os.Stdin.Fd()))
+			ptmxMu.Lock()
+			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+			ptmxMu.Unlock()
+		}
+	}()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.proxyLocalStdinRaw(ctx, ptmx, &ptmxMu, h.client, sessionID)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.proxyServerStdinPTY(ctx, ptmx, &ptmxMu, h.client, sessionID)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.pollClientApprovals(ctx, sessionID, true)
+	}()
+
+	// Forward OS signals to the subprocess process group.
+	sigCh := make(chan os.Signal, 8)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+	go func() {
+		for sig := range sigCh {
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
+			}
+			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+				cancel()
+				return
+			}
+		}
+	}()
+
+	// Wait for subprocess to exit.
+	exitCode := 0
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			ch.Log(alog.WARNING, "[remote-control] subprocess wait error: %v", err)
+		}
+	}
+
+	cancel()
+	wg.Wait()
+
+	if err := h.client.CompleteSession(sessionID, exitCode); err != nil {
+		ch.Log(alog.WARNING, "[remote-control] complete session error: %v", err)
+	}
+	// Still in raw mode here (defer restores after return); use \r\n.
+	h.writeSideChannel(true, "[remote-control] Session complete (exit %d)\n", exitCode)
+	return nil
+}
+
+// runPipe runs the subprocess with stdin/stdout/stderr pipes (non-TTY mode).
+// This is the path taken in tests, CI, and any non-interactive invocation.
+func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command []string, sessionID string) error {
+	h.writeSideChannel(false, "[remote-control] Session ID: %s\n", sessionID)
+
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Give the subprocess a 3-second grace period to exit after context
-	// cancellation before exec sends SIGKILL.
 	cmd.WaitDelay = 3 * time.Second
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -111,51 +230,44 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 
 	var wg sync.WaitGroup
 
-	// 1. Proxy stdout.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(proxyCtx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout")
+		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout")
 	}()
 
-	// 2. Proxy stderr.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(proxyCtx, stderrPipe, os.Stderr, h.client, sessionID, "stderr")
+		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, "stderr")
 	}()
 
-	// 3. Poll server for client stdin.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyServerStdin(proxyCtx, stdinPipe, h.client, sessionID)
+		h.proxyServerStdin(ctx, stdinPipe, h.client, sessionID)
 	}()
 
-	// 4. Read local terminal stdin.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyLocalStdin(proxyCtx, stdinPipe, h.client, sessionID)
+		h.proxyLocalStdin(ctx, stdinPipe, h.client, sessionID)
 	}()
 
-	// 5. Poll for client approvals (side-channel prompts to host terminal).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.pollClientApprovals(proxyCtx, sessionID)
+		h.pollClientApprovals(ctx, sessionID, false)
 	}()
 
-	// Forward signals to the subprocess process group.
-	// On SIGINT or SIGTERM, also cancel the proxy context so all goroutines
-	// shut down and cmd.Wait() returns (via exec.CommandContext's kill logic).
+	// Forward OS signals to the subprocess process group.
 	sigCh := make(chan os.Signal, 8)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigCh)
 	go func() {
 		for sig := range sigCh {
 			if cmd.Process != nil {
-				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
+				_ = syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
 			}
 			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
 				cancel()
@@ -174,41 +286,57 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 		}
 	}
 
-	// Cancel proxy goroutines and wait for them to finish.
 	cancel()
 	wg.Wait()
 
-	// Mark the session complete.
 	if err := h.client.CompleteSession(sessionID, exitCode); err != nil {
 		ch.Log(alog.WARNING, "[remote-control] complete session error: %v", err)
 	}
-	h.writeSideChannel("[remote-control] Session complete (exit %d)\n", exitCode)
+	h.writeSideChannel(false, "[remote-control] Session complete (exit %d)\n", exitCode)
 	return nil
 }
 
 // writeSideChannel writes a message to os.Stderr directly.
 // It never enters the subprocess pipe or session buffer.
-func (h *Host) writeSideChannel(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format, args...)
+// In rawMode, \n is replaced with \r\n for raw terminal compatibility.
+func (h *Host) writeSideChannel(rawMode bool, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if rawMode {
+		msg = strings.ReplaceAll(msg, "\n", "\r\n")
+	}
+	fmt.Fprint(os.Stderr, msg)
 }
 
-// readSideChannelLine pauses proxyLocalStdin, reads one line from os.Stdin,
-// then resumes proxyLocalStdin.
-func (h *Host) readSideChannelLine() (string, error) {
-	h.sideChannelMu.Lock()
-	h.sideChannelActive = true
+// waitForApprovalByte signals that a host approval prompt is active and waits
+// for a single byte response from proxyLocalStdin or proxyLocalStdinRaw.
+// No mutex is held during the wait — this is the deadlock-free replacement
+// for the old readSideChannelLine design.
+func (h *Host) waitForApprovalByte(ctx context.Context) (byte, error) {
+	respCh := make(chan byte, 1)
+	h.approvalMu.Lock()
+	h.approvalActive = true
+	h.approvalRespCh = respCh
+	h.approvalMu.Unlock()
+
 	defer func() {
-		h.sideChannelActive = false
-		h.sideChannelMu.Unlock()
+		h.approvalMu.Lock()
+		h.approvalActive = false
+		h.approvalRespCh = nil
+		h.approvalMu.Unlock()
 	}()
-	reader := bufio.NewReader(os.Stdin)
-	return reader.ReadString('\n')
+
+	select {
+	case b := <-respCh:
+		return b, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 }
 
 // pollClientApprovals polls the server for pending client join requests and
 // prompts the host user (via side-channel) to approve or deny each one.
-func (h *Host) pollClientApprovals(ctx context.Context, sessionID string) {
-	ticker := time.NewTicker(5 * time.Second)
+func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -225,41 +353,44 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string) {
 				continue
 			}
 			for _, client := range clients {
-				h.handleClientApproval(sessionID, client.ClientID, client.CommonName)
+				h.handleClientApproval(ctx, sessionID, client.ClientID, client.CommonName, rawMode)
 			}
 		}
 	}
 }
 
 // handleClientApproval prompts the host user to approve or deny a client.
-func (h *Host) handleClientApproval(sessionID, clientID, commonName string) {
-	h.writeSideChannel("\n[remote-control] Client %q (%s) wants to join.\n", commonName, clientID)
-	h.writeSideChannel("  [a] approve read-write  [r] read-only  [d] deny: ")
+func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, commonName string, rawMode bool) {
+	h.writeSideChannel(rawMode, "\n[remote-control] Client %q (%s) wants to join.\n", commonName, clientID)
+	h.writeSideChannel(rawMode, "  [a] approve read-write  [r] read-only  [d] deny: ")
 
-	line, err := h.readSideChannelLine()
+	b, err := h.waitForApprovalByte(ctx)
 	if err != nil {
 		ch.Log(alog.WARNING, "[remote-control] read approval response error: %v", err)
 		return
 	}
 
-	switch string([]byte(line)[0]) {
-	case "a", "A":
+	// Echo the typed character back.
+	h.writeSideChannel(rawMode, "%c\n", b)
+
+	switch b {
+	case 'a', 'A':
 		if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
 			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
 		} else {
-			h.writeSideChannel("[remote-control] Client %q approved (read-write)\n", commonName)
+			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
 		}
-	case "r", "R":
+	case 'r', 'R':
 		if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
 			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
 		} else {
-			h.writeSideChannel("[remote-control] Client %q approved (read-only)\n", commonName)
+			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
 		}
 	default:
 		if err := h.client.DenyClient(sessionID, clientID); err != nil {
 			ch.Log(alog.WARNING, "[remote-control] deny client error: %v", err)
 		} else {
-			h.writeSideChannel("[remote-control] Client %q denied\n", commonName)
+			h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
 		}
 	}
 }

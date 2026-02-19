@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,7 +58,6 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 				default:
 					if serr := client.AppendOutput(sessionID, stream, chunk, ts); serr != nil {
 						ch.Log(alog.WARNING, "[remote-control] append output error: %v", serr)
-						// TODO Phase 10: buffer locally and retry
 					}
 				}
 			}
@@ -77,13 +77,59 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 	}
 }
 
+// proxyPTYOutput reads from the PTY master (which merges stdout+stderr),
+// writes raw bytes to os.Stdout, and forwards each chunk to the server as
+// "stdout" stream output. io.EOF and "input/output error" are treated as
+// normal PTY HUP (subprocess exited).
+func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APIClient, sessionID string) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := ptmx.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			ts := time.Now()
+
+			if _, werr := os.Stdout.Write(chunk); werr != nil {
+				ch.Log(alog.WARNING, "[remote-control] local stdout write error: %v", werr)
+			}
+
+			if client != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					if serr := client.AppendOutput(sessionID, "stdout", chunk, ts); serr != nil {
+						ch.Log(alog.WARNING, "[remote-control] append output error: %v", serr)
+					}
+				}
+			}
+		}
+		if err != nil {
+			// io.EOF and "input/output error" are normal when the PTY slave closes.
+			if err != io.EOF && !strings.Contains(err.Error(), "input/output error") {
+				ch.Log(alog.WARNING, "[remote-control] PTY read error: %v", err)
+			}
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
 // proxyLocalStdin reads lines from os.Stdin, writes each line to the subprocess
 // stdin pipe, and bulk-rejects any pending client stdin entries (local wins).
 //
+// When an approval prompt is active (approvalActive == true), the first byte of
+// the line is routed to approvalRespCh instead of the subprocess — no mutex is
+// held during I/O, eliminating the deadlock present in the prior design.
+//
 // Stdin is read in a background goroutine so the outer loop can select on
-// ctx.Done() and exit promptly when the context is cancelled (e.g., on SIGTERM).
-// The background goroutine may remain blocked on scanner.Scan() after the main
-// loop exits, but since the process is terminating at that point this is safe.
+// ctx.Done() and exit promptly when the context is cancelled.
 func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *APIClient, sessionID string) {
 	type scanResult struct{ line []byte }
 	lineCh := make(chan scanResult, 1)
@@ -108,17 +154,30 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			return
 		case res, ok := <-lineCh:
 			if !ok {
-				// stdin closed (EOF) — close the subprocess stdin pipe.
-				stdinPipe.Close()
+				// os.Stdin reached EOF. Stop proxying local input but leave
+				// stdinPipe open so that server stdin (proxyServerStdin) can
+				// still flow through. The subprocess's stdin is implicitly
+				// closed when it exits or the context is cancelled.
 				return
 			}
 
-			// Check whether the side-channel is active (a prompt is being shown).
-			h.sideChannelMu.Lock()
-			active := h.sideChannelActive
-			h.sideChannelMu.Unlock()
+			// Briefly check whether an approval prompt is waiting for input.
+			h.approvalMu.Lock()
+			active := h.approvalActive
+			var respCh chan byte
 			if active {
-				// Side-channel owns os.Stdin; skip this line.
+				respCh = h.approvalRespCh
+			}
+			h.approvalMu.Unlock()
+
+			if active {
+				// Route the first byte to the approval handler; discard rest of line.
+				if len(res.line) > 0 {
+					select {
+					case respCh <- res.line[0]:
+					default:
+					}
+				}
 				continue
 			}
 
@@ -131,6 +190,72 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			// Reject all pending client stdin (host wins).
 			if err := client.RejectAllPending(sessionID); err != nil {
 				ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
+			}
+		}
+	}
+}
+
+// proxyLocalStdinRaw reads individual bytes from os.Stdin (which is in raw
+// terminal mode) and routes them: approval bytes go to the approval channel,
+// all other bytes go directly to the PTY master.
+//
+// A 1-byte read buffer is used for responsiveness (no buffering lag).
+func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
+	byteCh := make(chan byte, 16)
+
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				select {
+				case byteCh <- buf[0]:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil {
+				close(byteCh)
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case b, ok := <-byteCh:
+			if !ok {
+				return
+			}
+
+			h.approvalMu.Lock()
+			active := h.approvalActive
+			var respCh chan byte
+			if active {
+				respCh = h.approvalRespCh
+			}
+			h.approvalMu.Unlock()
+
+			if active {
+				select {
+				case respCh <- b:
+				default:
+				}
+				continue
+			}
+
+			ptmxMu.Lock()
+			_, _ = ptmx.Write([]byte{b})
+			ptmxMu.Unlock()
+
+			// CR (0x0d) is Enter in raw mode — host typed input, so reject
+			// any pending client stdin (host wins).
+			if b == 0x0d {
+				if err := client.RejectAllPending(sessionID); err != nil {
+					ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
+				}
 			}
 		}
 	}
@@ -171,6 +296,48 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 
 			if _, err := stdinPipe.Write(data); err != nil {
 				ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
+				return
+			}
+		}
+	}
+}
+
+// proxyServerStdinPTY polls the server for pending client stdin entries and
+// forwards accepted ones to the PTY master (under ptmxMu for safe concurrent access).
+func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			entry, err := client.PeekStdin(sessionID)
+			if err != nil {
+				ch.Log(alog.WARNING, "[remote-control] peek stdin error: %v", err)
+				continue
+			}
+			if entry == nil {
+				continue
+			}
+
+			data, err := base64.StdEncoding.DecodeString(entry.Data)
+			if err != nil || len(data) == 0 {
+				_ = client.RejectStdin(sessionID, entry.ID)
+				continue
+			}
+
+			if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
+				ch.Log(alog.WARNING, "[remote-control] accept stdin error: %v", err)
+				continue
+			}
+
+			ptmxMu.Lock()
+			_, err = ptmx.Write(data)
+			ptmxMu.Unlock()
+			if err != nil {
+				ch.Log(alog.WARNING, "[remote-control] PTY stdin write error: %v", err)
 				return
 			}
 		}

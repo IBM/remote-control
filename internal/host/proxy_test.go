@@ -89,37 +89,37 @@ func TestProxyOutputWritesLocally(t *testing.T) {
 	}
 }
 
-func TestSideChannelPauseResume(t *testing.T) {
+func TestApprovalPauseResume(t *testing.T) {
 	h := &Host{}
 
-	// Verify side-channel is not active initially.
-	h.sideChannelMu.Lock()
-	if h.sideChannelActive {
-		t.Error("expected sideChannelActive to be false initially")
+	// Verify approval is not active initially.
+	h.approvalMu.Lock()
+	if h.approvalActive {
+		t.Error("expected approvalActive to be false initially")
 	}
-	h.sideChannelMu.Unlock()
+	h.approvalMu.Unlock()
 
-	// Lock + set active manually to simulate the mutex behavior.
-	h.sideChannelMu.Lock()
-	h.sideChannelActive = true
-	h.sideChannelMu.Unlock()
+	// Set active manually to simulate the mutex behavior.
+	h.approvalMu.Lock()
+	h.approvalActive = true
+	h.approvalMu.Unlock()
 
-	h.sideChannelMu.Lock()
-	active := h.sideChannelActive
-	h.sideChannelMu.Unlock()
+	h.approvalMu.Lock()
+	active := h.approvalActive
+	h.approvalMu.Unlock()
 	if !active {
-		t.Error("expected sideChannelActive to be true after setting")
+		t.Error("expected approvalActive to be true after setting")
 	}
 
 	// Clear it.
-	h.sideChannelMu.Lock()
-	h.sideChannelActive = false
-	h.sideChannelMu.Unlock()
+	h.approvalMu.Lock()
+	h.approvalActive = false
+	h.approvalMu.Unlock()
 
-	h.sideChannelMu.Lock()
-	active = h.sideChannelActive
-	h.sideChannelMu.Unlock()
+	h.approvalMu.Lock()
+	active = h.approvalActive
+	h.approvalMu.Unlock()
 	if active {
-		t.Error("expected sideChannelActive to be false after clearing")
+		t.Error("expected approvalActive to be false after clearing")
 	}
 }
