@@ -78,9 +78,18 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 	}
 	h.writeSideChannel("[remote-control] Session ID: %s\n", sessionID)
 
+	// Set up cancellable context for the subprocess and all proxy goroutines.
+	// This must be created before exec.CommandContext so cancellation can kill
+	// the subprocess (exec kills the process when its context is done).
+	proxyCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Start the subprocess.
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd := exec.CommandContext(proxyCtx, command[0], command[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Give the subprocess a 3-second grace period to exit after context
+	// cancellation before exec sends SIGKILL.
+	cmd.WaitDelay = 3 * time.Second
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -99,10 +108,6 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start subprocess: %w", err)
 	}
-
-	// Set up cancellable context for goroutines.
-	proxyCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	var wg sync.WaitGroup
 
@@ -142,16 +147,22 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 	}()
 
 	// Forward signals to the subprocess process group.
+	// On SIGINT or SIGTERM, also cancel the proxy context so all goroutines
+	// shut down and cmd.Wait() returns (via exec.CommandContext's kill logic).
 	sigCh := make(chan os.Signal, 8)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 	go func() {
 		for sig := range sigCh {
 			if cmd.Process != nil {
 				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
 			}
+			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+				cancel()
+				return
+			}
 		}
 	}()
-	defer signal.Stop(sigCh)
 
 	// Wait for subprocess to exit.
 	exitCode := 0

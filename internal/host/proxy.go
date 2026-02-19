@@ -79,50 +79,59 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 
 // proxyLocalStdin reads lines from os.Stdin, writes each line to the subprocess
 // stdin pipe, and bulk-rejects any pending client stdin entries (local wins).
+//
+// Stdin is read in a background goroutine so the outer loop can select on
+// ctx.Done() and exit promptly when the context is cancelled (e.g., on SIGTERM).
+// The background goroutine may remain blocked on scanner.Scan() after the main
+// loop exits, but since the process is terminating at that point this is safe.
 func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *APIClient, sessionID string) {
-	scanner := bufio.NewScanner(os.Stdin)
+	type scanResult struct{ line []byte }
+	lineCh := make(chan scanResult, 1)
+
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			line := make([]byte, len(scanner.Bytes()))
+			copy(line, scanner.Bytes())
+			select {
+			case lineCh <- scanResult{line: line}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(lineCh)
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
+		case res, ok := <-lineCh:
+			if !ok {
+				// stdin closed (EOF) — close the subprocess stdin pipe.
+				stdinPipe.Close()
+				return
+			}
 
-		if !scanner.Scan() {
-			// EOF or error — close the subprocess stdin.
-			stdinPipe.Close()
-			return
-		}
+			// Check whether the side-channel is active (a prompt is being shown).
+			h.sideChannelMu.Lock()
+			active := h.sideChannelActive
+			h.sideChannelMu.Unlock()
+			if active {
+				// Side-channel owns os.Stdin; skip this line.
+				continue
+			}
 
-		// Check whether the side-channel is active (a prompt is being shown).
-		h.sideChannelMu.Lock()
-		active := h.sideChannelActive
-		h.sideChannelMu.Unlock()
-		if active {
-			// Side-channel owns os.Stdin; skip this line.
-			continue
-		}
+			lineWithNewline := append(res.line, '\n')
+			if _, err := stdinPipe.Write(lineWithNewline); err != nil {
+				ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
+				return
+			}
 
-		line := scanner.Bytes()
-		lineWithNewline := make([]byte, len(line)+1)
-		copy(lineWithNewline, line)
-		lineWithNewline[len(line)] = '\n'
-
-		// Write to subprocess stdin pipe.
-		if _, err := stdinPipe.Write(lineWithNewline); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
-			return
-		}
-
-		// Reject all pending client stdin (host wins).
-		if err := client.RejectAllPending(sessionID); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		default:
+			// Reject all pending client stdin (host wins).
+			if err := client.RejectAllPending(sessionID); err != nil {
+				ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
+			}
 		}
 	}
 }
