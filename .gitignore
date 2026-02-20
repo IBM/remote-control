@@ -1,2 +1,4 @@
 .claude/settings.local.json
 remote-control
+coverage.out
+coverage.html

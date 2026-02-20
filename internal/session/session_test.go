@@ -171,6 +171,43 @@ func TestStdinAcceptReject(t *testing.T) {
 	}
 }
 
+func TestRejectStdin(t *testing.T) {
+	s := newSession("test-rs", []string{"bash"})
+	now := time.Now()
+	s.EnqueueStdin(StdinEntry{ID: "x", Source: "client", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
+
+	if err := s.RejectStdin("x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	status, err := s.GetStdinStatus("x")
+	if err != nil || status != StdinRejected {
+		t.Errorf("expected rejected, got %v, err=%v", status, err)
+	}
+}
+
+func TestRejectStdinNotFound(t *testing.T) {
+	s := newSession("test-rsn", []string{"bash"})
+
+	err := s.RejectStdin("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent stdin entry")
+	}
+	if !IsNotFound(err) {
+		t.Errorf("expected NotFound error, got %T: %v", err, err)
+	}
+}
+
+func TestNotFoundErrorMessage(t *testing.T) {
+	err := errNotFound("abc-123")
+	if err.Error() == "" {
+		t.Error("expected non-empty error message")
+	}
+	want := "entry not found: abc-123"
+	if err.Error() != want {
+		t.Errorf("expected %q, got %q", want, err.Error())
+	}
+}
+
 func TestStreamOffsets(t *testing.T) {
 	s := newSession("test-7", []string{"bash"})
 	now := time.Now()
