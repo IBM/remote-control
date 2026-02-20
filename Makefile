@@ -1,4 +1,8 @@
-.PHONY: test coverage coverage-html clean
+.PHONY: build test coverage coverage-html clean
+
+# Build the binary
+build:
+	go build .
 
 # Run all tests with race detection.
 test:
