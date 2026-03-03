@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	"golang.org/x/term"
 )
 
 // inputReader reads stdin from the user and submits entries to the server.
@@ -26,9 +26,22 @@ func newInputReader(client *APIClient, sessionID, clientID string) *inputReader 
 	}
 }
 
-// run reads lines from os.Stdin and submits them to the server until ctx is cancelled.
+// run reads from os.Stdin and submits entries to the server until ctx is cancelled.
+// In raw mode (interactive terminal), reads individual bytes for control character support.
+// In cooked mode (pipes, redirects), reads complete lines.
 func (ir *inputReader) run(ctx context.Context) {
-	scanner := bufio.NewScanner(os.Stdin)
+	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
+	
+	if isRawMode {
+		ir.runRaw(ctx)
+	} else {
+		ir.runCooked(ctx)
+	}
+}
+
+// runRaw reads individual bytes from stdin (raw mode) for full control character support.
+func (ir *inputReader) runRaw(ctx context.Context) {
+	buf := make([]byte, 1)
 	for {
 		select {
 		case <-ctx.Done():
@@ -36,14 +49,52 @@ func (ir *inputReader) run(ctx context.Context) {
 		default:
 		}
 
-		if !scanner.Scan() {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
 			return
 		}
+		if n == 0 {
+			continue
+		}
 
-		line := scanner.Bytes()
-		data := make([]byte, len(line)+1)
-		copy(data, line)
-		data[len(line)] = '\n'
+		// Send raw byte immediately (no buffering for responsiveness).
+		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, buf[:n])
+		if err != nil {
+			if errors.Is(err, ErrForbidden) {
+				// In raw mode, can't write to stderr without disrupting TUI.
+				// Just log and continue.
+				ch.Log(alog.WARNING, "[remote-control] stdin not permitted")
+			} else {
+				ch.Log(alog.WARNING, "[remote-control] enqueue stdin error: %v", err)
+			}
+			continue
+		}
+
+		// Poll for acceptance or rejection in background.
+		go ir.watchStatus(ctx, entryID)
+	}
+}
+
+// runCooked reads complete lines from stdin (cooked mode) for non-interactive use.
+func (ir *inputReader) runCooked(ctx context.Context) {
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return
+		}
+		if n == 0 {
+			continue
+		}
+
+		data := make([]byte, n)
+		copy(data, buf[:n])
 
 		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
 		if err != nil {
