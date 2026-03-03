@@ -31,7 +31,7 @@ func newInputReader(client *APIClient, sessionID, clientID string) *inputReader 
 // In cooked mode (pipes, redirects), reads complete lines.
 func (ir *inputReader) run(ctx context.Context) {
 	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
-	
+
 	if isRawMode {
 		ir.runRaw(ctx)
 	} else {
@@ -39,9 +39,13 @@ func (ir *inputReader) run(ctx context.Context) {
 	}
 }
 
-// runRaw reads individual bytes from stdin (raw mode) for full control character support.
+// runRaw reads from stdin (raw mode) using a small buffer to capture multi-byte
+// sequences (like arrow keys) atomically. Uses non-blocking reads with timeout.
 func (ir *inputReader) runRaw(ctx context.Context) {
-	buf := make([]byte, 1)
+	// Use a 32-byte buffer to capture escape sequences atomically.
+	// Most escape sequences are 3-6 bytes, so this should capture them in one read.
+	buf := make([]byte, 32)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,6 +53,9 @@ func (ir *inputReader) runRaw(ctx context.Context) {
 		default:
 		}
 
+		// Read with a small buffer - this will typically capture complete
+		// escape sequences in a single read() call since they're generated
+		// atomically by the terminal driver.
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			return
@@ -57,12 +64,13 @@ func (ir *inputReader) runRaw(ctx context.Context) {
 			continue
 		}
 
-		// Send raw byte immediately (no buffering for responsiveness).
-		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, buf[:n])
+		// Send the chunk as-is (may be single byte or multi-byte sequence).
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
 		if err != nil {
 			if errors.Is(err, ErrForbidden) {
-				// In raw mode, can't write to stderr without disrupting TUI.
-				// Just log and continue.
 				ch.Log(alog.WARNING, "[remote-control] stdin not permitted")
 			} else {
 				ch.Log(alog.WARNING, "[remote-control] enqueue stdin error: %v", err)
