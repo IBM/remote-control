@@ -40,7 +40,8 @@ func (ir *inputReader) run(ctx context.Context) {
 }
 
 // runRaw reads from stdin (raw mode) using a small buffer to capture multi-byte
-// sequences (like arrow keys) atomically. Uses non-blocking reads with timeout.
+// sequences (like arrow keys) atomically. Filters out signal-generating control
+// characters (Ctrl+C, Ctrl+\, Ctrl+Z) to prevent them from being forwarded to host.
 func (ir *inputReader) runRaw(ctx context.Context) {
 	// Use a 32-byte buffer to capture escape sequences atomically.
 	// Most escape sequences are 3-6 bytes, so this should capture them in one read.
@@ -64,9 +65,30 @@ func (ir *inputReader) runRaw(ctx context.Context) {
 			continue
 		}
 
-		// Send the chunk as-is (may be single byte or multi-byte sequence).
-		data := make([]byte, n)
-		copy(data, buf[:n])
+		// Filter out signal-generating control characters that should only
+		// affect the local client, not be forwarded to the host.
+		data := make([]byte, 0, n)
+		for i := 0; i < n; i++ {
+			b := buf[i]
+			switch b {
+			case 0x03: // Ctrl+C (SIGINT) - exit client gracefully
+				ch.Log(alog.INFO, "[remote-control] Client received Ctrl+C, exiting...")
+				return
+			case 0x1c: // Ctrl+\ (SIGQUIT) - exit client
+				ch.Log(alog.INFO, "[remote-control] Client received Ctrl+\\, exiting...")
+				return
+			case 0x1a: // Ctrl+Z (SIGTSTP) - don't forward, ignore
+				ch.Log(alog.DEBUG, "[remote-control] Client ignoring Ctrl+Z")
+				continue
+			default:
+				data = append(data, b)
+			}
+		}
+
+		// If all bytes were filtered out, continue to next read
+		if len(data) == 0 {
+			continue
+		}
 
 		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
 		if err != nil {
