@@ -86,6 +86,12 @@ func init() {
 func runWrapMode(cmd *cobra.Command, args []string) error {
 	var wrappedCmd []string
 
+	cfg, err := config.Load(cliOverrides())
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	chCli.Log(alog.INFO, "Welcome to Remote Control!")
+
 	// -c flag takes priority: run sh -c <expr>
 	if flagCExpr != "" {
 		wrappedCmd = []string{"sh", "-c", flagCExpr}
@@ -97,11 +103,6 @@ func runWrapMode(cmd *cobra.Command, args []string) error {
 
 	if len(wrappedCmd) == 0 {
 		return cmd.Help()
-	}
-
-	cfg, err := config.Load(cliOverrides())
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
 	}
 
 	h := host.NewHost(cfg)
