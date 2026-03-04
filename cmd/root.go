@@ -60,11 +60,23 @@ remote clients poll for output and submit stdin.`,
 func Execute() {
 	// Trim args that are duplicate copies of the binary name
 	// Common in Termux: ./binary vs /data/data/.../binary
-	if absCmd, err := filepath.Abs(os.Args[0]); nil == err {
-		chCli.Log(alog.DEBUG3, "absCmd: [%s]", absCmd)
-		if len(os.Args) > 1 && os.Args[1] == absCmd {
-			os.Args = os.Args[1:]
-			chCli.Log(alog.DEBUG, "Trimmed duplicate binary name: %s", os.Args[0])
+	if len(os.Args) > 1 {
+		// Case 1: argv[0] contains a path (relative or absolute)
+		if strings.ContainsRune(os.Args[0], filepath.Separator) {
+			if absCmd, err := filepath.Abs(os.Args[0]); nil == err {
+				chCli.Log(alog.DEBUG3, "absCmd: [%s]", absCmd)
+				if os.Args[1] == absCmd {
+					os.Args = os.Args[1:]
+					chCli.Log(alog.DEBUG, "Trimmed duplicate binary name: %s", os.Args[0])
+				}
+			}
+		} else {
+			// Case 2: argv[0] is just the executable name (from PATH)
+			// Check if argv[1] is an absolute path ending with the same name
+			if filepath.IsAbs(os.Args[1]) && filepath.Base(os.Args[1]) == os.Args[0] {
+				os.Args = os.Args[1:]
+				chCli.Log(alog.DEBUG, "Trimmed duplicate binary name from PATH: %s", os.Args[0])
+			}
 		}
 	}
 	if err := rootCmd.Execute(); err != nil {
