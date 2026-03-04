@@ -396,40 +396,53 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 	h.writeSideChannel(rawMode, "  [a] approve read-write  [r] read-only  [d] deny: ")
 
 	// 4. Wait for the operator's response byte.
-	var b byte
-	select {
-	case b = <-respCh:
-	case <-ctx.Done():
-		ch.Log(alog.WARNING, "[remote-control] read approval response error: %v", ctx.Err())
-		if h.subprocessPid != 0 {
-			h.pauseOutput.Store(false)
-			_ = syscall.Kill(-h.subprocessPid, syscall.SIGCONT)
+	for true {
+		var b byte
+		select {
+		case b = <-respCh:
+		case <-ctx.Done():
+			ch.Log(alog.DEBUG, "[remote-control] read approval response error: %v", ctx.Err())
+			if h.subprocessPid != 0 {
+				h.pauseOutput.Store(false)
+				_ = syscall.Kill(-h.subprocessPid, syscall.SIGCONT)
+			}
+			return
 		}
-		return
-	}
 
-	// 5. Echo the typed character and write the status message while the
-	//    subprocess is still paused, so the TUI doesn't overwrite them.
-	h.writeSideChannel(rawMode, "%c\n", b)
+		// 5. Echo the typed character and write the status message while the
+		//    subprocess is still paused, so the TUI doesn't overwrite them.
+		h.writeSideChannel(rawMode, "%c\n", b)
 
-	switch b {
-	case 'a', 'A':
-		if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
-		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
+		var done bool = false
+		switch b {
+		case 'a', 'A':
+			if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
+				done = true
+			}
+		case 'r', 'R':
+			if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
+				done = true
+			}
+		case 'd', 'D':
+			if err := h.client.DenyClient(sessionID, clientID); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] deny client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
+				done = true
+			}
+		default:
+			ch.Log(alog.DEBUG, "[remote-control] invalid response: %v", b)
 		}
-	case 'r', 'R':
-		if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
+		if done {
+			break
 		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
-		}
-	default:
-		if err := h.client.DenyClient(sessionID, clientID); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] deny client error: %v", err)
-		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
+			respCh = h.armApprovalChannel()
 		}
 	}
 
