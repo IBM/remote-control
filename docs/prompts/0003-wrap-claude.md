@@ -1,0 +1,3 @@
+One of the main goals of this project is to be able to wrap AI coding agents like Claude Code. Many of these agents use complex terminal UI frameworks, and Claude Code specifically seems to be a little tricky to manage correctly with the side-channel for acceptance in the host.
+
+I have a script that launches Claude Code with a local models that we can use for testing (`claude-dev-box`). When I run it wrapped (`./remote-control --server http://localhost:8443 claude-dev-box`), it works seamlessly, but when I attempt to connect a remote client to it and get prompted with the acceptance prompt, things break due to how the wrapped script handles user input.
