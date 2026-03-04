@@ -48,7 +48,7 @@ func defaults() *Config {
 		ServerURL:         "https://localhost:8443",
 		RequireApproval:   false,
 		DefaultPermission: "read-write",
-		PollIntervalMs:    500,
+		PollIntervalMs:    100,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",
