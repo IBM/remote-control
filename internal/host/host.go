@@ -382,7 +382,9 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 
 	// 2. In PTY mode, pause the subprocess so its TUI cannot overwrite the prompt.
 	if h.subprocessPid != 0 {
-		_ = syscall.Kill(-h.subprocessPid, syscall.SIGSTOP)
+		if err := syscall.Kill(-h.subprocessPid, syscall.SIGSTOP); nil != err {
+			ch.Log(alog.WARNING, "[remote-control] error sending SIGSTOP to subprocess: %v", ctx.Err())
+		}
 		h.pauseOutput.Store(true)
 		// Brief sleep to let any PTY bytes already in flight drain through
 		// proxyPTYOutput before we write to stderr.
