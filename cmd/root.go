@@ -3,13 +3,17 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/host"
 )
+
+var chCli = alog.UseChannel("CLI")
 
 var (
 	flagServer     string
@@ -21,12 +25,12 @@ var (
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
 var knownSubcommands = map[string]bool{
-	"server":  true,
-	"connect": true,
-	"cert":    true,
-	"init":    true,
-	"help":    true,
-	"version": true,
+	"server":     true,
+	"connect":    true,
+	"cert":       true,
+	"init":       true,
+	"help":       true,
+	"version":    true,
 	"completion": true,
 }
 
@@ -41,7 +45,6 @@ var knownRCFlagValues = map[string]bool{
 	"--c":           true,
 }
 
-
 var rootCmd = &cobra.Command{
 	Use:   "remote-control",
 	Short: "Wrap a terminal command and control it remotely",
@@ -55,6 +58,15 @@ remote clients poll for output and submit stdin.`,
 
 // Execute runs the root command.
 func Execute() {
+	// Trim args that are duplicate copies of the binary name
+	// Common in Termux: ./binary vs /data/data/.../binary
+	if absCmd, err := filepath.Abs(os.Args[0]); nil == err {
+		chCli.Log(alog.DEBUG3, "absCmd: [%s]", absCmd)
+		if len(os.Args) > 1 && os.Args[1] == absCmd {
+			os.Args = os.Args[1:]
+			chCli.Log(alog.DEBUG, "Trimmed duplicate binary name: %s", os.Args[0])
+		}
+	}
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -102,6 +114,8 @@ func findWrappedCommandFromOSArgs(rawArgs []string) []string {
 	i := 0
 	for i < len(rawArgs) {
 		arg := rawArgs[i]
+		chCli.Log(alog.DEBUG3, "Parsing flag [%s]", arg)
+		arg = strings.TrimSpace(arg)
 
 		if arg == "--" {
 			// Explicit end-of-flags: everything after is the wrapped command.
@@ -154,4 +168,3 @@ func cliOverrides() map[string]string {
 	}
 	return overrides
 }
-
