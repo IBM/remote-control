@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,12 +29,18 @@ type Host struct {
 	cfg    *config.Config
 	client *APIClient
 
-	// Channel-based approval routing (replaces sideChannelMu/sideChannelActive).
-	// No mutex is held during I/O — eliminates the deadlock present in the
-	// previous sideChannel design.
+	// Channel-based approval routing
 	approvalMu     sync.Mutex
 	approvalActive bool
 	approvalRespCh chan byte // nil when not active
+
+	// PTY-mode subprocess management.
+	// subprocessPid is set once in runPTY before goroutines start; safe to read
+	// without synchronisation (goroutine-start provides the happens-before edge).
+	subprocessPid int
+	// pauseOutput suppresses PTY→stdout forwarding during approval prompts so
+	// that the subprocess's TUI cannot re-render over the prompt text.
+	pauseOutput atomic.Bool
 }
 
 // NewHost creates a Host from the given config.
@@ -111,6 +118,11 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 		return fmt.Errorf("pty start: %w", err)
 	}
 	defer ptmx.Close()
+
+	// Record the subprocess PID so handleClientApproval can pause/resume it.
+	if cmd.Process != nil {
+		h.subprocessPid = cmd.Process.Pid
+	}
 
 	// Set PTY size to match host terminal.
 	cols, rows, _ := term.GetSize(int(os.Stdin.Fd()))
@@ -307,30 +319,25 @@ func (h *Host) writeSideChannel(rawMode bool, format string, args ...any) {
 	fmt.Fprint(os.Stderr, msg)
 }
 
-// waitForApprovalByte signals that a host approval prompt is active and waits
-// for a single byte response from proxyLocalStdin or proxyLocalStdinRaw.
-// No mutex is held during the wait — this is the deadlock-free replacement
-// for the old readSideChannelLine design.
-func (h *Host) waitForApprovalByte(ctx context.Context) (byte, error) {
+// armApprovalChannel marks the host as waiting for an approval byte and returns
+// a buffered channel that will receive it. The caller must call disarmApprovalChannel
+// when done, typically via defer. Arming before writing the prompt eliminates the
+// race window where a fast keypress could reach the subprocess instead.
+func (h *Host) armApprovalChannel() chan byte {
 	respCh := make(chan byte, 1)
 	h.approvalMu.Lock()
 	h.approvalActive = true
 	h.approvalRespCh = respCh
 	h.approvalMu.Unlock()
+	return respCh
+}
 
-	defer func() {
-		h.approvalMu.Lock()
-		h.approvalActive = false
-		h.approvalRespCh = nil
-		h.approvalMu.Unlock()
-	}()
-
-	select {
-	case b := <-respCh:
-		return b, nil
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
+// disarmApprovalChannel clears the approval state set by armApprovalChannel.
+func (h *Host) disarmApprovalChannel() {
+	h.approvalMu.Lock()
+	h.approvalActive = false
+	h.approvalRespCh = nil
+	h.approvalMu.Unlock()
 }
 
 // pollClientApprovals polls the server for pending client join requests and
@@ -360,37 +367,88 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMod
 }
 
 // handleClientApproval prompts the host user to approve or deny a client.
+//
+// For PTY-mode subprocesses (subprocessPid != 0) the subprocess is paused with
+// SIGSTOP before the prompt is displayed and resumed with SIGCONT only after all
+// side-channel status messages have been written. This prevents full-screen TUI
+// frameworks like Ink (used by Claude Code) from re-rendering over the prompt.
+//
+// The approval channel is armed before writing the prompt to eliminate the race
+// window between displaying the prompt and starting to capture the response byte.
 func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, commonName string, rawMode bool) {
+	// 1. Arm the approval channel BEFORE writing the prompt.
+	respCh := h.armApprovalChannel()
+	defer h.disarmApprovalChannel()
+
+	// 2. In PTY mode, pause the subprocess so its TUI cannot overwrite the prompt.
+	if h.subprocessPid != 0 {
+		if err := syscall.Kill(-h.subprocessPid, syscall.SIGSTOP); nil != err {
+			ch.Log(alog.WARNING, "[remote-control] error sending SIGSTOP to subprocess: %v", ctx.Err())
+		}
+		h.pauseOutput.Store(true)
+		// Brief sleep to let any PTY bytes already in flight drain through
+		// proxyPTYOutput before we write to stderr.
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 3. Write the approval prompt.
 	h.writeSideChannel(rawMode, "\n[remote-control] Client %q (%s) wants to join.\n", commonName, clientID)
 	h.writeSideChannel(rawMode, "  [a] approve read-write  [r] read-only  [d] deny: ")
 
-	b, err := h.waitForApprovalByte(ctx)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] read approval response error: %v", err)
-		return
+	// 4. Wait for the operator's response byte.
+	for true {
+		var b byte
+		select {
+		case b = <-respCh:
+		case <-ctx.Done():
+			ch.Log(alog.DEBUG, "[remote-control] read approval response error: %v", ctx.Err())
+			if h.subprocessPid != 0 {
+				h.pauseOutput.Store(false)
+				_ = syscall.Kill(-h.subprocessPid, syscall.SIGCONT)
+			}
+			return
+		}
+
+		// 5. Echo the typed character and write the status message while the
+		//    subprocess is still paused, so the TUI doesn't overwrite them.
+		h.writeSideChannel(rawMode, "%c\n", b)
+
+		var done bool = false
+		switch b {
+		case 'a', 'A':
+			if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
+				done = true
+			}
+		case 'r', 'R':
+			if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
+				done = true
+			}
+		case 'd', 'D':
+			if err := h.client.DenyClient(sessionID, clientID); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] deny client error: %v", err)
+			} else {
+				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
+				done = true
+			}
+		default:
+			ch.Log(alog.DEBUG, "[remote-control] invalid response: %v", b)
+		}
+		if done {
+			break
+		} else {
+			respCh = h.armApprovalChannel()
+		}
 	}
 
-	// Echo the typed character back.
-	h.writeSideChannel(rawMode, "%c\n", b)
-
-	switch b {
-	case 'a', 'A':
-		if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
-		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
-		}
-	case 'r', 'R':
-		if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] approve client error: %v", err)
-		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
-		}
-	default:
-		if err := h.client.DenyClient(sessionID, clientID); err != nil {
-			ch.Log(alog.WARNING, "[remote-control] deny client error: %v", err)
-		} else {
-			h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
-		}
+	// 6. Resume the subprocess AFTER all side-channel messages are written.
+	if h.subprocessPid != 0 {
+		h.pauseOutput.Store(false)
+		_ = syscall.Kill(-h.subprocessPid, syscall.SIGCONT)
 	}
 }

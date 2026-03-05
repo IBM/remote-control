@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
 	"github.com/google/uuid"
+	"golang.org/x/term"
 )
 
 var ch = alog.UseChannel("CLIENT")
@@ -77,14 +80,63 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 		}
 	}
 
+	// Put client terminal in raw mode if interactive (enables control characters).
+	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
+	if isRawMode {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return fmt.Errorf("make raw: %w", err)
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState) //nolint:errcheck
+	}
+
 	// Fetch and render full history.
 	if err := c.renderHistory(ctx, sessionID); err != nil {
 		return fmt.Errorf("render history: %w", err)
 	}
 
+	// Extended pause to let terminal query responses (OSC sequences) arrive
+	// in response to the host TUI's capability queries. The host TUI sends
+	// queries when it detects a new client, and the client terminal responds
+	// with OSC sequences. We wait for these to arrive so they can be drained.
+	if isRawMode {
+		time.Sleep(200 * time.Millisecond)
+		// Drain any OSC responses that arrived
+		buf := make([]byte, 4096)
+		for {
+			n, _ := os.Stdin.Read(buf)
+			if n == 0 || n < len(buf) {
+				break
+			}
+		}
+	}
+
 	// Start polling and input goroutines.
 	pollCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Handle terminal resize events (SIGWINCH) in raw mode.
+	if isRawMode {
+		sigWinchCh := make(chan os.Signal, 1)
+		signal.Notify(sigWinchCh, syscall.SIGWINCH)
+		defer signal.Stop(sigWinchCh)
+
+		go func() {
+			for {
+				select {
+				case <-pollCtx.Done():
+					return
+				case <-sigWinchCh:
+					cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
+					if err == nil {
+						// TODO: Send resize event to server when API is implemented
+						_ = cols
+						_ = rows
+					}
+				}
+			}
+		}()
+	}
 
 	pol := newPoller(c.api, sessionID)
 	// Set poller offsets to current end of stream (after history was rendered).

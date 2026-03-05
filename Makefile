@@ -4,6 +4,9 @@
 build:
 	go build .
 
+build.android:
+	GOOS=android GOARCH=arm64 go build -o remote-control-android .
+
 # Run all tests with race detection.
 test:
 	go test ./... -race -count=1 -timeout 120s

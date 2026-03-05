@@ -3,13 +3,17 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/host"
 )
+
+var chCli = alog.UseChannel("CLI")
 
 var (
 	flagServer     string
@@ -21,12 +25,12 @@ var (
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
 var knownSubcommands = map[string]bool{
-	"server":  true,
-	"connect": true,
-	"cert":    true,
-	"init":    true,
-	"help":    true,
-	"version": true,
+	"server":     true,
+	"connect":    true,
+	"cert":       true,
+	"init":       true,
+	"help":       true,
+	"version":    true,
 	"completion": true,
 }
 
@@ -41,7 +45,6 @@ var knownRCFlagValues = map[string]bool{
 	"--c":           true,
 }
 
-
 var rootCmd = &cobra.Command{
 	Use:   "remote-control",
 	Short: "Wrap a terminal command and control it remotely",
@@ -55,6 +58,27 @@ remote clients poll for output and submit stdin.`,
 
 // Execute runs the root command.
 func Execute() {
+	// Trim args that are duplicate copies of the binary name
+	// Common in Termux: ./binary vs /data/data/.../binary
+	if len(os.Args) > 1 {
+		// Case 1: argv[0] contains a path (relative or absolute)
+		if strings.ContainsRune(os.Args[0], filepath.Separator) {
+			if absCmd, err := filepath.Abs(os.Args[0]); nil == err {
+				chCli.Log(alog.DEBUG3, "absCmd: [%s]", absCmd)
+				if os.Args[1] == absCmd {
+					os.Args = os.Args[1:]
+					chCli.Log(alog.DEBUG, "Trimmed duplicate binary name: %s", os.Args[0])
+				}
+			}
+		} else {
+			// Case 2: argv[0] is just the executable name (from PATH)
+			// Check if argv[1] is an absolute path ending with the same name
+			if filepath.IsAbs(os.Args[1]) && filepath.Base(os.Args[1]) == os.Args[0] {
+				os.Args = os.Args[1:]
+				chCli.Log(alog.DEBUG, "Trimmed duplicate binary name from PATH: %s", os.Args[0])
+			}
+		}
+	}
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -74,6 +98,12 @@ func init() {
 func runWrapMode(cmd *cobra.Command, args []string) error {
 	var wrappedCmd []string
 
+	cfg, err := config.Load(cliOverrides())
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	chCli.Log(alog.INFO, "Welcome to Remote Control!")
+
 	// -c flag takes priority: run sh -c <expr>
 	if flagCExpr != "" {
 		wrappedCmd = []string{"sh", "-c", flagCExpr}
@@ -87,11 +117,6 @@ func runWrapMode(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	}
 
-	cfg, err := config.Load(cliOverrides())
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
 	h := host.NewHost(cfg)
 	return h.Run(cmd.Context(), wrappedCmd)
 }
@@ -102,6 +127,8 @@ func findWrappedCommandFromOSArgs(rawArgs []string) []string {
 	i := 0
 	for i < len(rawArgs) {
 		arg := rawArgs[i]
+		chCli.Log(alog.DEBUG3, "Parsing flag [%s]", arg)
+		arg = strings.TrimSpace(arg)
 
 		if arg == "--" {
 			// Explicit end-of-flags: everything after is the wrapped command.
@@ -154,4 +181,3 @@ func cliOverrides() map[string]string {
 	}
 	return overrides
 }
-

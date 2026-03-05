@@ -46,9 +46,9 @@ func defaults() *Config {
 	return &Config{
 		ConfigDir:         configDir,
 		ServerURL:         "https://localhost:8443",
-		RequireApproval:   true,
+		RequireApproval:   false,
 		DefaultPermission: "read-write",
-		PollIntervalMs:    500,
+		PollIntervalMs:    100,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

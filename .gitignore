@@ -1,4 +1,5 @@
 .claude/settings.local.json
 remote-control
+remote-control-android
 coverage.out
 coverage.html

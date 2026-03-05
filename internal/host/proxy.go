@@ -90,8 +90,12 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 			copy(chunk, buf[:n])
 			ts := time.Now()
 
-			if _, werr := os.Stdout.Write(chunk); werr != nil {
-				ch.Log(alog.WARNING, "[remote-control] local stdout write error: %v", werr)
+			// Skip local display while an approval prompt is shown so the
+			// subprocess TUI cannot re-render over the prompt text.
+			if !h.pauseOutput.Load() {
+				if _, werr := os.Stdout.Write(chunk); werr != nil {
+					ch.Log(alog.WARNING, "[remote-control] local stdout write error: %v", werr)
+				}
 			}
 
 			if client != nil {
