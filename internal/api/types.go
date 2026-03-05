@@ -62,8 +62,9 @@ type OutputChunkResponse struct {
 
 // PollOutputResponse is returned by GET /sessions/{id}/output.
 type PollOutputResponse struct {
-	Chunks      []OutputChunkResponse `json:"chunks"`
-	NextOffsets map[string]int64      `json:"next_offsets"`
+	Chunks        []OutputChunkResponse `json:"chunks"`
+	NextOffsets   map[string]int64      `json:"next_offsets"`
+	ActualOffsets map[string]int64      `json:"actual_offsets"`
 }
 
 // PatchSessionRequest is the body for PATCH /sessions/{id}.

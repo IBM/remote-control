@@ -13,19 +13,21 @@ import (
 
 // Server wraps an http.Server and holds the session store.
 type Server struct {
-	httpServer *http.Server
-	mux        *http.ServeMux
-	store      session.Store
-	cfg        *config.Config
+	httpServer    *http.Server
+	mux           *http.ServeMux
+	store         session.Store
+	cfg           *config.Config
+	clientTimeout time.Duration
 }
 
 // NewServer creates a new Server bound to addr, using the given Store.
 func NewServer(addr string, store session.Store, cfg *config.Config) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
-		mux:   mux,
-		store: store,
-		cfg:   cfg,
+		mux:           mux,
+		store:         store,
+		cfg:           cfg,
+		clientTimeout: time.Duration(cfg.ClientTimeoutSeconds) * time.Second,
 	}
 	s.registerRoutes()
 

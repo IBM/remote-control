@@ -60,8 +60,9 @@ type OutputChunk struct {
 
 // PollOutputResponse is the response from GET /sessions/{id}/output.
 type PollOutputResponse struct {
-	Chunks      []OutputChunk    `json:"chunks"`
-	NextOffsets map[string]int64 `json:"next_offsets"`
+	Chunks        []OutputChunk    `json:"chunks"`
+	NextOffsets   map[string]int64 `json:"next_offsets"`
+	ActualOffsets map[string]int64 `json:"actual_offsets"`
 }
 
 // ErrForbidden is returned when the server rejects a request with 403.

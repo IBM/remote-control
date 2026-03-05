@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/session"
 	"github.com/google/uuid"
 )
@@ -124,6 +125,14 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.Complete(req.ExitCode)
+
+	// Immediately delete completed session from memory
+	if err := s.store.Delete(id); err != nil {
+		ch.Log(alog.WARNING, "[remote-control] failed to delete completed session: %v", err)
+	} else {
+		ch.Log(alog.DEBUG, "[remote-control] deleted completed session: %s", id)
+	}
+
 	writeJSON(w, http.StatusOK, sessionToResponse(sess))
 }
 
@@ -152,6 +161,15 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.AppendOutput(stream, data, ts)
+
+	// Event-driven cleanup: remove inactive clients when host sends new data
+	if s.cfg.ClientTimeoutSeconds > 0 {
+		removed := sess.RemoveInactiveClients(s.clientTimeout)
+		if len(removed) > 0 {
+			ch.Log(alog.DEBUG, "[remote-control] removed inactive clients: %v", removed)
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -163,9 +181,14 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract client_id from query parameter
+	clientID := r.URL.Query().Get("client_id")
+
 	// Enforce client approval for output polling.
 	if s.cfg.RequireApproval {
-		clientID, _ := s.clientIdentity(r)
+		if clientID == "" {
+			clientID, _ = s.clientIdentity(r)
+		}
 		if !s.checkClientApproval(sess, clientID, false) {
 			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved"})
 			return
@@ -175,8 +198,31 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 	stdoutOffset, _ := strconv.ParseInt(r.URL.Query().Get("stdout_offset"), 10, 64)
 	stderrOffset, _ := strconv.ParseInt(r.URL.Query().Get("stderr_offset"), 10, 64)
 
-	stdoutChunks := sess.ReadOutput(session.StreamStdout, stdoutOffset)
-	stderrChunks := sess.ReadOutput(session.StreamStderr, stderrOffset)
+	// Update client activity if client_id is provided
+	if clientID != "" {
+		if err := sess.UpdateClientActivity(clientID, stdoutOffset, stderrOffset); err != nil {
+			// Client not registered - this is OK for host polls
+			ch.Log(alog.DEBUG, "[remote-control] client activity update failed: %v", err)
+		}
+	}
+
+	// Event-driven cleanup: remove inactive clients
+	if s.cfg.ClientTimeoutSeconds > 0 {
+		removed := sess.RemoveInactiveClients(s.clientTimeout)
+		if len(removed) > 0 {
+			ch.Log(alog.DEBUG, "[remote-control] removed inactive clients: %v", removed)
+		}
+	}
+
+	// Read output with adjusted offsets if data was purged
+	stdoutChunks, actualStdoutOffset := sess.ReadOutput(session.StreamStdout, stdoutOffset)
+	stderrChunks, actualStderrOffset := sess.ReadOutput(session.StreamStderr, stderrOffset)
+
+	// Event-driven cleanup: purge consumed output
+	purgedStdout, purgedStderr := sess.PurgeConsumedOutput()
+	if purgedStdout > 0 || purgedStderr > 0 {
+		ch.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
+	}
 
 	// Merge and sort by timestamp.
 	all := make([]session.OutputChunk, 0, len(stdoutChunks)+len(stderrChunks))
@@ -208,8 +254,9 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, PollOutputResponse{
-		Chunks:      chunks,
-		NextOffsets: map[string]int64{"stdout": nextStdout, "stderr": nextStderr},
+		Chunks:        chunks,
+		NextOffsets:   map[string]int64{"stdout": nextStdout, "stderr": nextStderr},
+		ActualOffsets: map[string]int64{"stdout": actualStdoutOffset, "stderr": actualStderrOffset},
 	})
 }
 
@@ -282,6 +329,13 @@ func (s *Server) handleAcceptStdin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
 	}
+
+	// Event-driven cleanup: purge consumed stdin entries
+	purged := sess.PurgeConsumedStdin()
+	if purged > 0 {
+		ch.Log(alog.DEBUG, "[remote-control] purged stdin entries: %d", purged)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

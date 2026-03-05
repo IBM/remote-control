@@ -39,7 +39,7 @@ func (p *poller) run(ctx context.Context) {
 			return
 		case <-time.After(p.interval):
 			if err := p.poll(); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] poll error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] poll error: %v", err)
 				p.backoff()
 			} else {
 				p.interval = pollInitialInterval
@@ -52,6 +52,18 @@ func (p *poller) poll() error {
 	result, err := p.client.PollOutput(p.sessionID, p.stdoutOffset, p.stderrOffset)
 	if err != nil {
 		return err
+	}
+
+	// Check if data was purged (actual offsets differ from requested)
+	if actualStdout, ok := result.ActualOffsets["stdout"]; ok && actualStdout > p.stdoutOffset {
+		ch.Log(alog.DEBUG, "[remote-control] stdout data purged: requested offset %d, actual offset %d (missed %d bytes)",
+			p.stdoutOffset, actualStdout, actualStdout-p.stdoutOffset)
+		p.stdoutOffset = actualStdout
+	}
+	if actualStderr, ok := result.ActualOffsets["stderr"]; ok && actualStderr > p.stderrOffset {
+		ch.Log(alog.DEBUG, "[remote-control] stderr data purged: requested offset %d, actual offset %d (missed %d bytes)",
+			p.stderrOffset, actualStderr, actualStderr-p.stderrOffset)
+		p.stderrOffset = actualStderr
 	}
 
 	// Render chunks sorted by timestamp.
