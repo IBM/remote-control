@@ -4,10 +4,11 @@ import (
 	"net/http"
 
 	"github.com/gabe-l-hart/remote-control/internal/session"
+	"github.com/google/uuid"
 )
 
 // handleRegisterClient handles POST /sessions/{id}/clients.
-// A client registers itself; the server returns pending or approved status.
+// Server generates a unique client ID and returns it to the client.
 func (s *Server) handleRegisterClient(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := s.store.Get(id)
@@ -16,9 +17,20 @@ func (s *Server) handleRegisterClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract client identity from TLS peer certificate CN (if available).
-	clientID, commonName := s.clientIdentity(r)
+	// Read optional common name from request body
+	var body struct {
+		CommonName string `json:"common_name"`
+	}
+	_ = readJSON(r, &body)
 
+	// Extract common name from TLS cert if not provided
+	commonName := body.CommonName
+	if commonName == "" {
+		_, commonName = s.clientIdentity(r)
+	}
+
+	// Server generates the client ID
+	clientID := uuid.New().String()
 	rec := sess.RegisterClient(clientID, commonName)
 
 	// If approval is not required, auto-approve with default permission.

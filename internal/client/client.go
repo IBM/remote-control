@@ -13,7 +13,6 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
-	"github.com/google/uuid"
 	"golang.org/x/term"
 )
 
@@ -23,16 +22,16 @@ var ch = alog.UseChannel("CLIENT")
 type Client struct {
 	cfg      *config.Config
 	api      *APIClient
-	clientID string
+	clientID string // Set after registration with server
 }
 
 // NewClient creates a Client from the given config.
 func NewClient(cfg *config.Config) *Client {
 	httpClient := buildHTTPClient(cfg)
 	return &Client{
-		cfg:      cfg,
-		api:      NewAPIClient(cfg.ServerURL, httpClient),
-		clientID: uuid.New().String(),
+		cfg: cfg,
+		api: NewAPIClient(cfg.ServerURL, httpClient),
+		// clientID is set after registration
 	}
 }
 
@@ -68,11 +67,14 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 		}
 	}
 
-	// Register with the session (for approval).
-	status, err := c.api.RegisterClient(sessionID, c.clientID)
+	// Register with the session (server assigns client ID).
+	clientID, status, err := c.api.RegisterClient(sessionID)
 	if err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
+	c.clientID = clientID
+	ch.Log(alog.DEBUG, "[remote-control] Registered with client ID: %s", c.clientID)
+
 	if status == "pending" {
 		fmt.Fprintln(os.Stderr, "[remote-control] Waiting for host approval...")
 		if err := c.waitForApproval(ctx, sessionID); err != nil {
@@ -138,9 +140,9 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 		}()
 	}
 
-	pol := newPoller(c.api, sessionID)
+	pol := newPoller(c.api, sessionID, c.clientID)
 	// Set poller offsets to current end of stream (after history was rendered).
-	result, err := c.api.PollOutput(sessionID, 0, 0)
+	result, err := c.api.PollOutput(sessionID, c.clientID, 0, 0)
 	if err == nil {
 		pol.stdoutOffset = result.NextOffsets["stdout"]
 		pol.stderrOffset = result.NextOffsets["stderr"]
@@ -209,7 +211,7 @@ func (c *Client) pickSession(_ context.Context) (string, error) {
 
 // renderHistory fetches and renders full session history from offset 0.
 func (c *Client) renderHistory(_ context.Context, sessionID string) error {
-	result, err := c.api.PollOutput(sessionID, 0, 0)
+	result, err := c.api.PollOutput(sessionID, c.clientID, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -234,7 +236,7 @@ func (c *Client) waitForApproval(ctx context.Context, sessionID string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			result, err := c.api.PollOutput(sessionID, 0, 0)
+			result, err := c.api.PollOutput(sessionID, c.clientID, 0, 0)
 			if err != nil {
 				continue
 			}

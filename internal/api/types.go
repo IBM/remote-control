@@ -73,9 +73,9 @@ type PatchSessionRequest struct {
 }
 
 // StdinRequest is the body for POST /sessions/{id}/stdin.
+// The client_id is now passed as a query parameter instead of in the body.
 type StdinRequest struct {
-	Source string `json:"source"` // "host" or client ID
-	Data   string `json:"data"`   // base64-encoded
+	Data string `json:"data"` // base64-encoded
 }
 
 // StdinResponse is returned by GET /sessions/{id}/stdin.

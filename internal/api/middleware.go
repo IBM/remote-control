@@ -8,7 +8,7 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 )
 
-var ch = alog.UseChannel("ENDPOINT")
+var middlewareCh = alog.UseChannel("ENDPOINT")
 
 type responseWriter struct {
 	http.ResponseWriter
@@ -26,7 +26,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		ch.Log(alog.DEBUG, "%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start))
+		middlewareCh.Log(alog.DEBUG, "%s %s %d %s", r.Method, r.URL.Path, rw.status, time.Since(start))
 	})
 }
 
@@ -35,7 +35,7 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				ch.Log(alog.ERROR, "PANIC: %v\n%s", rec, debug.Stack())
+				middlewareCh.Log(alog.ERROR, "PANIC: %v\n%s", rec, debug.Stack())
 				writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
 			}
 		}()

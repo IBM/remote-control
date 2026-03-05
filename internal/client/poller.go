@@ -17,15 +17,17 @@ const (
 type poller struct {
 	client       *APIClient
 	sessionID    string
+	clientID     string
 	stdoutOffset int64
 	stderrOffset int64
 	interval     time.Duration
 }
 
-func newPoller(client *APIClient, sessionID string) *poller {
+func newPoller(client *APIClient, sessionID, clientID string) *poller {
 	return &poller{
 		client:    client,
 		sessionID: sessionID,
+		clientID:  clientID,
 		interval:  pollInitialInterval,
 	}
 }
@@ -49,7 +51,7 @@ func (p *poller) run(ctx context.Context) {
 }
 
 func (p *poller) poll() error {
-	result, err := p.client.PollOutput(p.sessionID, p.stdoutOffset, p.stderrOffset)
+	result, err := p.client.PollOutput(p.sessionID, p.clientID, p.stdoutOffset, p.stderrOffset)
 	if err != nil {
 		return err
 	}
