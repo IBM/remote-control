@@ -273,9 +273,13 @@ func (s *Session) PurgeConsumedOutput() (purgedStdout, purgedStderr int) {
 		}
 	}
 
-	// If no approved clients, don't purge anything
+	// If no approved clients, purge ALL chunks (no one is consuming)
 	if minStdoutOffset == -1 {
-		return 0, 0
+		purgedStdout = len(s.stdoutChunks)
+		purgedStderr = len(s.stderrChunks)
+		s.stdoutChunks = nil
+		s.stderrChunks = nil
+		return purgedStdout, purgedStderr
 	}
 
 	// Purge stdout chunks
