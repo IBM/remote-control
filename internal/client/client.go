@@ -100,17 +100,9 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 	// Extended pause to let terminal query responses (OSC sequences) arrive
 	// in response to the host TUI's capability queries. The host TUI sends
 	// queries when it detects a new client, and the client terminal responds
-	// with OSC sequences. We wait for these to arrive so they can be drained.
+	// with OSC sequences. The input reader's filterInput will handle these.
 	if isRawMode {
 		time.Sleep(200 * time.Millisecond)
-		// Drain any OSC responses that arrived
-		buf := make([]byte, 4096)
-		for {
-			n, _ := os.Stdin.Read(buf)
-			if n == 0 || n < len(buf) {
-				break
-			}
-		}
 	}
 
 	// Start polling and input goroutines.
