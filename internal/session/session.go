@@ -250,9 +250,57 @@ func (s *Session) GetStatus() Status {
 	return s.Status
 }
 
+// purgeOldChunks removes the oldest chunks from the slice to keep total bytes under maxBytes.
+// Returns the number of chunks purged.
+func (s *Session) purgeOldChunks(chunks *[]OutputChunk, currentOffset int64, maxBytes int64) int {
+	if len(*chunks) == 0 {
+		return 0
+	}
+
+	// Calculate total bytes in buffer
+	var totalBytes int64
+	for _, chunk := range *chunks {
+		totalBytes += int64(len(chunk.Data))
+	}
+
+	// If under limit, keep everything
+	if totalBytes <= maxBytes {
+		return 0
+	}
+
+	// Find the cutoff point: keep chunks from this index onward
+	var keptBytes int64
+	cutoffIndex := len(*chunks)
+
+	// Walk backwards from the end, accumulating bytes
+	for i := len(*chunks) - 1; i >= 0; i-- {
+		chunkSize := int64(len((*chunks)[i].Data))
+		if keptBytes+chunkSize > maxBytes {
+			// This chunk would exceed the limit
+			cutoffIndex = i + 1
+			break
+		}
+		keptBytes += chunkSize
+	}
+
+	// If we need to purge everything (even the last chunk exceeds limit), keep at least the last chunk
+	if cutoffIndex >= len(*chunks) {
+		cutoffIndex = len(*chunks) - 1
+	}
+
+	purged := cutoffIndex
+	if purged > 0 {
+		*chunks = (*chunks)[cutoffIndex:]
+	}
+
+	return purged
+}
+
 // PurgeConsumedOutput removes OutputChunks that all active approved clients have consumed.
+// If maxInitialBufferBytes > 0 and no approved clients exist, keeps the most recent chunks
+// up to that byte limit to preserve TUI state for late-joining clients.
 // Returns the number of chunks purged for stdout and stderr.
-func (s *Session) PurgeConsumedOutput() (purgedStdout, purgedStderr int) {
+func (s *Session) PurgeConsumedOutput(maxInitialBufferBytes int64) (purgedStdout, purgedStderr int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -273,12 +321,19 @@ func (s *Session) PurgeConsumedOutput() (purgedStdout, purgedStderr int) {
 		}
 	}
 
-	// If no approved clients, purge ALL chunks (no one is consuming)
+	// If no approved clients, purge old chunks beyond the buffer limit
 	if minStdoutOffset == -1 {
-		purgedStdout = len(s.stdoutChunks)
-		purgedStderr = len(s.stderrChunks)
-		s.stdoutChunks = nil
-		s.stderrChunks = nil
+		if maxInitialBufferBytes > 0 {
+			// Keep most recent chunks up to maxInitialBufferBytes
+			purgedStdout = s.purgeOldChunks(&s.stdoutChunks, s.stdoutOffset, maxInitialBufferBytes)
+			purgedStderr = s.purgeOldChunks(&s.stderrChunks, s.stderrOffset, maxInitialBufferBytes)
+		} else {
+			// No limit: purge everything
+			purgedStdout = len(s.stdoutChunks)
+			purgedStderr = len(s.stderrChunks)
+			s.stdoutChunks = nil
+			s.stderrChunks = nil
+		}
 		return purgedStdout, purgedStderr
 	}
 

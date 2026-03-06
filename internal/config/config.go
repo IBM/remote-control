@@ -33,10 +33,11 @@ type Config struct {
 	ServerTLS TLSBundle `json:"server_tls"`
 	ClientTLS TLSBundle `json:"client_tls"`
 
-	RequireApproval      bool   `json:"require_approval"`
-	DefaultPermission    string `json:"default_permission"`
-	PollIntervalMs       int    `json:"poll_interval_ms"`
-	ClientTimeoutSeconds int    `json:"client_timeout_seconds"`
+	RequireApproval       bool   `json:"require_approval"`
+	DefaultPermission     string `json:"default_permission"`
+	PollIntervalMs        int    `json:"poll_interval_ms"`
+	ClientTimeoutSeconds  int    `json:"client_timeout_seconds"`
+	MaxInitialBufferBytes int64  `json:"max_initial_buffer_bytes"`
 
 	Log LoggingConfig `json:"log"`
 }
@@ -45,12 +46,13 @@ func defaults() *Config {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".remote-control")
 	return &Config{
-		ConfigDir:            configDir,
-		ServerURL:            "https://localhost:8443",
-		RequireApproval:      false,
-		DefaultPermission:    "read-write",
-		PollIntervalMs:       100,
-		ClientTimeoutSeconds: 60,
+		ConfigDir:             configDir,
+		ServerURL:             "https://localhost:8443",
+		RequireApproval:       false,
+		DefaultPermission:     "read-write",
+		PollIntervalMs:        100,
+		ClientTimeoutSeconds:  60,
+		MaxInitialBufferBytes: 1024 * 1024, // 1MB default
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

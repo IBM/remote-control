@@ -175,7 +175,7 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Event-driven cleanup: purge consumed output
-	purgedStdout, purgedStderr := sess.PurgeConsumedOutput()
+	purgedStdout, purgedStderr := sess.PurgeConsumedOutput(s.cfg.MaxInitialBufferBytes)
 	if purgedStdout > 0 || purgedStderr > 0 {
 		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
 	}
@@ -229,7 +229,7 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 	stderrChunks, actualStderrOffset := sess.ReadOutput(session.StreamStderr, stderrOffset)
 
 	// Event-driven cleanup: purge consumed output
-	purgedStdout, purgedStderr := sess.PurgeConsumedOutput()
+	purgedStdout, purgedStderr := sess.PurgeConsumedOutput(s.cfg.MaxInitialBufferBytes)
 	if purgedStdout > 0 || purgedStderr > 0 {
 		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
 	}
