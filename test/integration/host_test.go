@@ -122,20 +122,20 @@ func waitForAnySession(t *testing.T, serverURL string, timeout time.Duration) st
 }
 
 // getOutput collects all output chunks from a session and returns the combined text.
-// Returns empty string if session doesn't exist (404).
-func getOutput(t *testing.T, serverURL, sessionID string) string {
+// Returns empty string if session doesn't exist (404). Takes clientID to track output.
+func getOutput(t *testing.T, serverURL, sessionID, clientID string) string {
 	t.Helper()
-	resp, err := http.Get(serverURL + "/sessions/" + sessionID + "/output?stdout_offset=0&stderr_offset=0")
+	resp, err := http.Get(serverURL + "/sessions/" + sessionID + "/output?client_id=" + clientID + "&stdout_offset=0&stderr_offset=0")
 	if err != nil {
 		t.Fatalf("get output: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	// If session is deleted (404), return empty string
 	if resp.StatusCode == http.StatusNotFound {
 		return ""
 	}
-	
+
 	var result struct {
 		Chunks []struct {
 			Data string `json:"data"`
@@ -168,23 +168,42 @@ func TestHostOutputProxying(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var output string
 	var sessionID string
-	
+	var clientID string
+	var startedSession bool
+
 	for time.Now().Before(deadline) {
 		sessions := listSessions(t, serverURL)
 		if len(sessions) > 0 {
 			sessionID = sessions[0]["id"].(string)
-			output = getOutput(t, serverURL, sessionID)
+			// Register a client for this session only once
+			if !startedSession {
+				clientResp, err := http.Post(serverURL+"/sessions/"+sessionID+"/clients", "application/json", bytes.NewReader([]byte("{}")))
+				if err != nil {
+					t.Fatalf("create client: %v", err)
+				}
+				var clientRespData struct {
+					ClientID string `json:"client_id"`
+				}
+				json.NewDecoder(clientResp.Body).Decode(&clientRespData)
+				clientResp.Body.Close()
+				clientID = clientRespData.ClientID
+				if clientID == "" {
+					t.Fatal("expected non-empty client_id")
+				}
+				startedSession = true
+			}
+			output = getOutput(t, serverURL, sessionID, clientID)
 			if output == "hello\nworld\n" {
 				break
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	if sessionID == "" {
 		t.Fatal("no session found")
 	}
-	
+
 	if output != "hello\nworld\n" {
 		t.Errorf("expected %q, got %q", "hello\nworld\n", output)
 	}
@@ -197,7 +216,7 @@ func TestHostOutputProxying(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
 	}
-	
+
 	// After completion, session should be deleted from memory
 	resp, _ := http.Get(serverURL + "/sessions/" + sessionID)
 	resp.Body.Close()
@@ -225,15 +244,35 @@ func TestHostStdinRouting(t *testing.T) {
 	// Poll aggressively for session and wait for it to be ready
 	deadline := time.Now().Add(5 * time.Second)
 	var sessionID string
+	var clientID string
+	var startedSession bool
+
 	for time.Now().Before(deadline) {
 		sessions := listSessions(t, serverURL)
 		if len(sessions) > 0 {
 			sessionID = sessions[0]["id"].(string)
+			// Register a client for this session only once
+			if !startedSession {
+				clientResp, err := http.Post(serverURL+"/sessions/"+sessionID+"/clients", "application/json", bytes.NewReader([]byte("{}")))
+				if err != nil {
+					t.Fatalf("create client: %v", err)
+				}
+				var clientRespData struct {
+					ClientID string `json:"client_id"`
+				}
+				json.NewDecoder(clientResp.Body).Decode(&clientRespData)
+				clientResp.Body.Close()
+				clientID = clientRespData.ClientID
+				if clientID == "" {
+					t.Fatal("expected non-empty client_id")
+				}
+				startedSession = true
+			}
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	if sessionID == "" {
 		t.Fatal("no session found")
 	}
@@ -260,13 +299,13 @@ func TestHostStdinRouting(t *testing.T) {
 	deadline = time.Now().Add(5 * time.Second)
 	var output string
 	for time.Now().Before(deadline) {
-		output = getOutput(t, serverURL, sessionID)
+		output = getOutput(t, serverURL, sessionID, clientID)
 		if output == "hello from client\n" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	if output != "hello from client\n" {
 		t.Errorf("expected %q, got %q", "hello from client\n", output)
 	}
@@ -279,7 +318,7 @@ func TestHostStdinRouting(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
 	}
-	
+
 	// After completion, session should be deleted from memory
 	resp2, _ := http.Get(serverURL + "/sessions/" + sessionID)
 	resp2.Body.Close()
@@ -334,7 +373,7 @@ func TestHostSessionCompleted(t *testing.T) {
 	}()
 
 	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
-	
+
 	// Wait for Run() to complete, which means the session was completed
 	select {
 	case err := <-runErr:
@@ -344,7 +383,7 @@ func TestHostSessionCompleted(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
 	}
-	
+
 	// After completion, session should be deleted from memory
 	// We can't check the exit code anymore since the session is deleted
 	resp, _ := http.Get(serverURL + "/sessions/" + sessionID)

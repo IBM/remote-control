@@ -49,14 +49,29 @@ func TestFullSessionLifecycle(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// 3. Poll output with retry to handle async processing.
+	// 3. Register a client.
+	clientResp, err := http.Post(serverURL+"/sessions/"+session.ID+"/clients", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	var clientRespData struct {
+		ClientID string `json:"client_id"`
+	}
+	json.NewDecoder(clientResp.Body).Decode(&clientRespData)
+	clientResp.Body.Close()
+	clientID := clientRespData.ClientID
+	if clientID == "" {
+		t.Fatal("expected non-empty client_id")
+	}
+
+	// 4. Poll output with retry to handle async processing (with client_id).
 	var poll struct {
 		Chunks []struct {
 			Stream string `json:"stream"`
 			Data   string `json:"data"`
 		} `json:"chunks"`
 	}
-	
+
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		pollResp, err := http.Get(serverURL + "/sessions/" + session.ID + "/output?stdout_offset=0&stderr_offset=0")
@@ -65,7 +80,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 		}
 		json.NewDecoder(pollResp.Body).Decode(&poll)
 		pollResp.Body.Close()
-		
+
 		if len(poll.Chunks) >= 2 {
 			break
 		}
@@ -89,7 +104,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	}
 	json.NewDecoder(patchResp.Body).Decode(&patchResult)
 	patchResp.Body.Close()
-	
+
 	if patchResult.Status != "completed" {
 		t.Errorf("expected completed status in PATCH response, got %q", patchResult.Status)
 	}
