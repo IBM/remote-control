@@ -6,7 +6,7 @@ import (
 )
 
 func TestPollerBackoff(t *testing.T) {
-	p := newPoller(nil, "test")
+	p := newPoller(nil, "test", "test-client")
 	if p.interval != pollInitialInterval {
 		t.Errorf("expected initial interval %v, got %v", pollInitialInterval, p.interval)
 	}
@@ -48,7 +48,7 @@ func TestParseTimestampInvalid(t *testing.T) {
 }
 
 func TestPollerOffsets(t *testing.T) {
-	p := newPoller(nil, "test")
+	p := newPoller(nil, "test", "test-client")
 	stdout, stderr := p.currentOffsets()
 	if stdout != 0 || stderr != 0 {
 		t.Errorf("expected zero offsets, got stdout=%d stderr=%d", stdout, stderr)

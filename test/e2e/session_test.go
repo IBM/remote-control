@@ -43,22 +43,34 @@ func TestFullSessionLifecycle(t *testing.T) {
 			"timestamp": now.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
 		})
 		resp, _ = http.Post(serverURL+"/sessions/"+session.ID+"/output", "application/json", bytes.NewReader(body))
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("append output failed with status %d", resp.StatusCode)
+		}
 		resp.Body.Close()
 	}
 
-	// 3. Poll output.
-	pollResp, err := http.Get(serverURL + "/sessions/" + session.ID + "/output?stdout_offset=0&stderr_offset=0")
-	if err != nil {
-		t.Fatalf("poll output: %v", err)
-	}
+	// 3. Poll output with retry to handle async processing.
 	var poll struct {
 		Chunks []struct {
 			Stream string `json:"stream"`
 			Data   string `json:"data"`
 		} `json:"chunks"`
 	}
-	json.NewDecoder(pollResp.Body).Decode(&poll)
-	pollResp.Body.Close()
+	
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pollResp, err := http.Get(serverURL + "/sessions/" + session.ID + "/output?stdout_offset=0&stderr_offset=0")
+		if err != nil {
+			t.Fatalf("poll output: %v", err)
+		}
+		json.NewDecoder(pollResp.Body).Decode(&poll)
+		pollResp.Body.Close()
+		
+		if len(poll.Chunks) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	if len(poll.Chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d", len(poll.Chunks))
@@ -72,16 +84,20 @@ func TestFullSessionLifecycle(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPatch, serverURL+"/sessions/"+session.ID, bytes.NewReader(patchBody))
 	req.Header.Set("Content-Type", "application/json")
 	patchResp, _ := http.DefaultClient.Do(req)
-	patchResp.Body.Close()
-
-	// 5. Verify session is completed.
-	getResp, _ := http.Get(serverURL + "/sessions/" + session.ID)
-	var completed struct {
+	var patchResult struct {
 		Status string `json:"status"`
 	}
-	json.NewDecoder(getResp.Body).Decode(&completed)
+	json.NewDecoder(patchResp.Body).Decode(&patchResult)
+	patchResp.Body.Close()
+	
+	if patchResult.Status != "completed" {
+		t.Errorf("expected completed status in PATCH response, got %q", patchResult.Status)
+	}
+
+	// 5. Verify session is deleted from memory after completion.
+	getResp, _ := http.Get(serverURL + "/sessions/" + session.ID)
 	getResp.Body.Close()
-	if completed.Status != "completed" {
-		t.Errorf("expected completed, got %q", completed.Status)
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after completion (session deleted), got %d", getResp.StatusCode)
 	}
 }

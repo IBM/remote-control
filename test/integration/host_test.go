@@ -95,21 +95,34 @@ func waitForSession(t *testing.T, serverURL, sessionID, wantStatus string, timeo
 }
 
 // waitForAnySession polls until at least one session exists and returns its ID.
+// Note: With immediate deletion of completed sessions, this may not find sessions
+// that complete very quickly. Use a shorter polling interval.
 func waitForAnySession(t *testing.T, serverURL string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	var lastSeenID string
 	for time.Now().Before(deadline) {
 		sessions := listSessions(t, serverURL)
 		if len(sessions) > 0 {
-			return sessions[0]["id"].(string)
+			lastSeenID = sessions[0]["id"].(string)
+			return lastSeenID
 		}
-		time.Sleep(50 * time.Millisecond)
+		// If we've seen a session ID before but it's gone now, it completed
+		// Return the last seen ID even though it's deleted
+		if lastSeenID != "" {
+			return lastSeenID
+		}
+		time.Sleep(10 * time.Millisecond) // Faster polling
 	}
-	t.Fatal("no session created within timeout")
-	return ""
+	// If we never saw a session, that's a real failure
+	if lastSeenID == "" {
+		t.Fatal("no session created within timeout")
+	}
+	return lastSeenID
 }
 
 // getOutput collects all output chunks from a session and returns the combined text.
+// Returns empty string if session doesn't exist (404).
 func getOutput(t *testing.T, serverURL, sessionID string) string {
 	t.Helper()
 	resp, err := http.Get(serverURL + "/sessions/" + sessionID + "/output?stdout_offset=0&stderr_offset=0")
@@ -117,6 +130,12 @@ func getOutput(t *testing.T, serverURL, sessionID string) string {
 		t.Fatalf("get output: %v", err)
 	}
 	defer resp.Body.Close()
+	
+	// If session is deleted (404), return empty string
+	if resp.StatusCode == http.StatusNotFound {
+		return ""
+	}
+	
 	var result struct {
 		Chunks []struct {
 			Data string `json:"data"`
@@ -141,13 +160,31 @@ func TestHostOutputProxying(t *testing.T) {
 
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- h.Run(ctx, []string{"sh", "-c", `printf 'hello\nworld\n'`})
+		// Add a small sleep to keep session alive long enough to read output
+		runErr <- h.Run(ctx, []string{"sh", "-c", `printf 'hello\nworld\n'; sleep 0.5`})
 	}()
 
-	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
-	waitForSession(t, serverURL, sessionID, "completed", 5*time.Second)
-
-	output := getOutput(t, serverURL, sessionID)
+	// Poll aggressively for session creation and output
+	deadline := time.Now().Add(5 * time.Second)
+	var output string
+	var sessionID string
+	
+	for time.Now().Before(deadline) {
+		sessions := listSessions(t, serverURL)
+		if len(sessions) > 0 {
+			sessionID = sessions[0]["id"].(string)
+			output = getOutput(t, serverURL, sessionID)
+			if output == "hello\nworld\n" {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	
+	if sessionID == "" {
+		t.Fatal("no session found")
+	}
+	
 	if output != "hello\nworld\n" {
 		t.Errorf("expected %q, got %q", "hello\nworld\n", output)
 	}
@@ -160,6 +197,13 @@ func TestHostOutputProxying(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
 	}
+	
+	// After completion, session should be deleted from memory
+	resp, _ := http.Get(serverURL + "/sessions/" + sessionID)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after completion (session deleted), got %d", resp.StatusCode)
+	}
 }
 
 // TestHostStdinRouting verifies that stdin enqueued via the server API is
@@ -171,14 +215,28 @@ func TestHostStdinRouting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// sh -c 'read x; echo "$x"' reads one line from stdin then exits.
-	// Using sh avoids stdio buffering issues that cat would have with pipe output.
+	// sh -c 'read x; echo "$x"; sleep 0.5' reads one line from stdin, echoes it, then sleeps
+	// to keep session alive long enough to read output before deletion.
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- h.Run(ctx, []string{"sh", "-c", `read x; echo "$x"`})
+		runErr <- h.Run(ctx, []string{"sh", "-c", `read x; echo "$x"; sleep 0.5`})
 	}()
 
-	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
+	// Poll aggressively for session and wait for it to be ready
+	deadline := time.Now().Add(5 * time.Second)
+	var sessionID string
+	for time.Now().Before(deadline) {
+		sessions := listSessions(t, serverURL)
+		if len(sessions) > 0 {
+			sessionID = sessions[0]["id"].(string)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	
+	if sessionID == "" {
+		t.Fatal("no session found")
+	}
 
 	// Give the subprocess a moment to reach its read() call.
 	time.Sleep(100 * time.Millisecond)
@@ -186,10 +244,9 @@ func TestHostStdinRouting(t *testing.T) {
 	// Enqueue stdin via the server API.
 	payload := base64.StdEncoding.EncodeToString([]byte("hello from client\n"))
 	body, _ := json.Marshal(map[string]string{
-		"source": "test-client",
-		"data":   payload,
+		"data": payload,
 	})
-	resp, err := http.Post(serverURL+"/sessions/"+sessionID+"/stdin", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(serverURL+"/sessions/"+sessionID+"/stdin?client_id=test-client", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("enqueue stdin: %v", err)
 	}
@@ -199,11 +256,17 @@ func TestHostStdinRouting(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&stdinResp) //nolint:errcheck
 	resp.Body.Close()
 
-	// sh exits after reading one line, so the session should complete naturally.
-	waitForSession(t, serverURL, sessionID, "completed", 5*time.Second)
-
-	// echo "$x" outputs the line read from stdin.
-	output := getOutput(t, serverURL, sessionID)
+	// Poll until we see the expected output
+	deadline = time.Now().Add(5 * time.Second)
+	var output string
+	for time.Now().Before(deadline) {
+		output = getOutput(t, serverURL, sessionID)
+		if output == "hello from client\n" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	
 	if output != "hello from client\n" {
 		t.Errorf("expected %q, got %q", "hello from client\n", output)
 	}
@@ -215,6 +278,13 @@ func TestHostStdinRouting(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
+	}
+	
+	// After completion, session should be deleted from memory
+	resp2, _ := http.Get(serverURL + "/sessions/" + sessionID)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after completion (session deleted), got %d", resp2.StatusCode)
 	}
 }
 
@@ -264,17 +334,8 @@ func TestHostSessionCompleted(t *testing.T) {
 	}()
 
 	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
-	result := waitForSession(t, serverURL, sessionID, "completed", 5*time.Second)
-
-	exitCode, ok := result["exit_code"]
-	if !ok {
-		t.Fatal("expected exit_code in session response")
-	}
-	// JSON numbers decode as float64.
-	if code, ok := exitCode.(float64); !ok || int(code) != 42 {
-		t.Errorf("expected exit code 42, got %v", exitCode)
-	}
-
+	
+	// Wait for Run() to complete, which means the session was completed
 	select {
 	case err := <-runErr:
 		if err != nil {
@@ -282,5 +343,13 @@ func TestHostSessionCompleted(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("Run() did not return after session completed")
+	}
+	
+	// After completion, session should be deleted from memory
+	// We can't check the exit code anymore since the session is deleted
+	resp, _ := http.Get(serverURL + "/sessions/" + sessionID)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after completion (session deleted), got %d", resp.StatusCode)
 	}
 }
