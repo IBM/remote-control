@@ -47,7 +47,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 
 			// Write to local terminal.
 			if _, werr := dst.Write(chunk); werr != nil {
-				ch.Log(alog.WARNING, "[remote-control] local %s write error: %v", stream, werr)
+				ch.Log(alog.DEBUG, "[remote-control] local %s write error: %v", stream, werr)
 			}
 
 			// Forward to server (non-blocking on context cancel).
@@ -57,14 +57,14 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 					return
 				default:
 					if serr := client.AppendOutput(sessionID, stream, chunk, ts); serr != nil {
-						ch.Log(alog.WARNING, "[remote-control] append output error: %v", serr)
+						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
 				}
 			}
 		}
 		if err != nil {
 			if err != io.EOF {
-				ch.Log(alog.WARNING, "[remote-control] %s pipe read error: %v", stream, err)
+				ch.Log(alog.DEBUG, "[remote-control] %s pipe read error: %v", stream, err)
 			}
 			return
 		}
@@ -104,7 +104,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 					return
 				default:
 					if serr := client.AppendOutput(sessionID, "stdout", chunk, ts); serr != nil {
-						ch.Log(alog.WARNING, "[remote-control] append output error: %v", serr)
+						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
 				}
 			}
@@ -193,7 +193,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 
 			// Reject all pending client stdin (host wins).
 			if err := client.RejectAllPending(sessionID); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] reject-all error: %v", err)
 			}
 		}
 	}
@@ -258,7 +258,7 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 			// any pending client stdin (host wins).
 			if b == 0x0d {
 				if err := client.RejectAllPending(sessionID); err != nil {
-					ch.Log(alog.WARNING, "[remote-control] reject-all error: %v", err)
+					ch.Log(alog.DEBUG, "[remote-control] reject-all error: %v", err)
 				}
 			}
 		}
@@ -278,7 +278,7 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 		case <-ticker.C:
 			entry, err := client.PeekStdin(sessionID)
 			if err != nil {
-				ch.Log(alog.WARNING, "[remote-control] peek stdin error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] peek stdin error: %v", err)
 				continue
 			}
 			if entry == nil {
@@ -294,12 +294,12 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 
 			// Accept first (sets host-grounded timestamp on server), then write.
 			if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] accept stdin error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] accept stdin error: %v", err)
 				continue
 			}
 
 			if _, err := stdinPipe.Write(data); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] subprocess stdin write error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] subprocess stdin write error: %v", err)
 				return
 			}
 		}
@@ -319,7 +319,7 @@ func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *s
 		case <-ticker.C:
 			entry, err := client.PeekStdin(sessionID)
 			if err != nil {
-				ch.Log(alog.WARNING, "[remote-control] peek stdin error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] peek stdin error: %v", err)
 				continue
 			}
 			if entry == nil {
@@ -333,7 +333,7 @@ func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *s
 			}
 
 			if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] accept stdin error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] accept stdin error: %v", err)
 				continue
 			}
 

@@ -347,7 +347,7 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMod
 			}
 			clients, err := h.client.ListPendingClients(sessionID)
 			if err != nil {
-				ch.Log(alog.WARNING, "[remote-control] list pending clients error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] list pending clients error: %v", err)
 				continue
 			}
 			for _, client := range clients {
