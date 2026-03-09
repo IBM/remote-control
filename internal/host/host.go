@@ -2,7 +2,6 @@ package host
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -66,14 +65,6 @@ func buildHTTPClient(cfg *config.Config) *http.Client {
 		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
 		return &http.Client{Timeout: 30 * time.Second}
 	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
-}
-
-// buildHTTPClientTLS creates an http.Client from an explicit tls.Config.
-func buildHTTPClientTLS(tlsCfg *tls.Config) *http.Client {
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},

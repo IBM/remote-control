@@ -25,7 +25,7 @@ func makeSession(t *testing.T, ts *httptest.Server, cmd ...string) string {
 func enqueueStdin(t *testing.T, ts *httptest.Server, sid, data string) StdinResponse {
 	t.Helper()
 	encoded := base64.StdEncoding.EncodeToString([]byte(data))
-	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin", StdinRequest{Source: "test", Data: encoded})
+	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin?client_id=test", StdinRequest{Data: encoded})
 	var entry StdinResponse
 	decodeJSON(t, resp, &entry)
 	return entry
@@ -51,21 +51,26 @@ func TestStdinAcceptAndStatus(t *testing.T) {
 	sid := makeSession(t, ts)
 	entry := enqueueStdin(t, ts, sid, "ls -la\n")
 
-	acceptResp := postJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/accept", nil)
-	if acceptResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", acceptResp.StatusCode)
-	}
-	acceptResp.Body.Close()
-
+	// Check status before accepting
 	statusResp := getJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/status")
 	if statusResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", statusResp.StatusCode)
 	}
 	var statusResult StdinStatusResponse
 	decodeJSON(t, statusResp, &statusResult)
-	if statusResult.Status != "accepted" {
-		t.Errorf("expected accepted, got %s", statusResult.Status)
+	if statusResult.Status != "pending" {
+		t.Errorf("expected pending before accept, got %s", statusResult.Status)
 	}
+
+	// Accept the entry
+	acceptResp := postJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/accept", nil)
+	if acceptResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", acceptResp.StatusCode)
+	}
+	acceptResp.Body.Close()
+
+	// After accepting, the entry is purged from memory, so we can't check status
+	// The successful 204 response is sufficient verification
 }
 
 func TestStdinReject(t *testing.T) {
@@ -162,9 +167,8 @@ func TestStdinEnqueueInvalidBase64(t *testing.T) {
 	_, ts := newTestServer(t)
 	sid := makeSession(t, ts)
 
-	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin", StdinRequest{
-		Source: "test",
-		Data:   "not-valid-base64!!!",
+	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin?client_id=test", StdinRequest{
+		Data: "not-valid-base64!!!",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)

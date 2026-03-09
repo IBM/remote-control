@@ -16,7 +16,7 @@ func TestAppendAndReadOutput(t *testing.T) {
 	s.AppendOutput(StreamStderr, []byte("err1"), t1)
 
 	// Read all stdout from offset 0
-	chunks := s.ReadOutput(StreamStdout, 0)
+	chunks, _ := s.ReadOutput(StreamStdout, 0)
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 stdout chunks, got %d", len(chunks))
 	}
@@ -35,7 +35,7 @@ func TestAppendAndReadOutput(t *testing.T) {
 	}
 
 	// Read stderr
-	errChunks := s.ReadOutput(StreamStderr, 0)
+	errChunks, _ := s.ReadOutput(StreamStderr, 0)
 	if len(errChunks) != 1 || errChunks[0].Stream != StreamStderr {
 		t.Errorf("unexpected stderr chunks: %+v", errChunks)
 	}
@@ -48,13 +48,13 @@ func TestReadOutputFromOffset(t *testing.T) {
 	s.AppendOutput(StreamStdout, []byte(" world"), now.Add(time.Millisecond))
 
 	// Read from offset 5 (start of second chunk)
-	chunks := s.ReadOutput(StreamStdout, 5)
+	chunks, _ := s.ReadOutput(StreamStdout, 5)
 	if len(chunks) != 1 || string(chunks[0].Data) != " world" {
 		t.Errorf("expected second chunk from offset 5, got %+v", chunks)
 	}
 
 	// Read from offset 3 (within first chunk)
-	chunks = s.ReadOutput(StreamStdout, 3)
+	chunks, _ = s.ReadOutput(StreamStdout, 3)
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 chunks from offset 3, got %d", len(chunks))
 	}
@@ -77,7 +77,7 @@ func TestConcurrentAppendOutput(t *testing.T) {
 	}
 	wg.Wait()
 
-	chunks := s.ReadOutput(StreamStdout, 0)
+	chunks, _ := s.ReadOutput(StreamStdout, 0)
 	totalBytes := int64(0)
 	for _, ch := range chunks {
 		totalBytes += int64(len(ch.Data))

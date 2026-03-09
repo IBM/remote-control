@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/session"
 	"github.com/google/uuid"
 )
+
+var handlerCh = alog.UseChannel("HANDLER")
 
 // writeJSON encodes v as JSON and writes it to w with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -124,6 +127,14 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.Complete(req.ExitCode)
+
+	// Immediately delete completed session from memory
+	if err := s.store.Delete(id); err != nil {
+		handlerCh.Log(alog.WARNING, "[remote-control] failed to delete completed session: %v", err)
+	} else {
+		handlerCh.Log(alog.DEBUG, "[remote-control] deleted completed session: %s", id)
+	}
+
 	writeJSON(w, http.StatusOK, sessionToResponse(sess))
 }
 
@@ -131,6 +142,7 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	handlerCh.Log(alog.DEBUG2, "Appending output for session %s", id)
 	sess, err := s.store.Get(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
@@ -152,6 +164,22 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.AppendOutput(stream, data, ts)
+
+	// Event-driven cleanup: remove inactive clients when host sends new data
+	if s.cfg.ClientTimeoutSeconds > 0 {
+		handlerCh.Log(alog.DEBUG3, "Checking for client timeout after %v", s.clientTimeout)
+		removed := sess.RemoveInactiveClients(s.clientTimeout)
+		if len(removed) > 0 {
+			handlerCh.Log(alog.DEBUG, "[remote-control] removed inactive clients: %v", removed)
+		}
+	}
+
+	// Event-driven cleanup: purge consumed output
+	purgedStdout, purgedStderr := sess.PurgeConsumedOutput(s.cfg.MaxInitialBufferBytes)
+	if purgedStdout > 0 || purgedStderr > 0 {
+		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -163,20 +191,48 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce client approval for output polling.
-	if s.cfg.RequireApproval {
-		clientID, _ := s.clientIdentity(r)
-		if !s.checkClientApproval(sess, clientID, false) {
-			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved"})
-			return
+	// Extract client_id from query parameter (required for clients, optional for host)
+	clientID := r.URL.Query().Get("client_id")
+
+	// If client_id is provided, enforce approval and track activity
+	if clientID != "" {
+		// Enforce client approval for output polling
+		if s.cfg.RequireApproval {
+			if !s.checkClientApproval(sess, clientID, false) {
+				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved"})
+				return
+			}
 		}
 	}
 
 	stdoutOffset, _ := strconv.ParseInt(r.URL.Query().Get("stdout_offset"), 10, 64)
 	stderrOffset, _ := strconv.ParseInt(r.URL.Query().Get("stderr_offset"), 10, 64)
 
-	stdoutChunks := sess.ReadOutput(session.StreamStdout, stdoutOffset)
-	stderrChunks := sess.ReadOutput(session.StreamStderr, stderrOffset)
+	// Update client activity if client_id is provided
+	if clientID != "" {
+		if err := sess.UpdateClientActivity(clientID, stdoutOffset, stderrOffset); err != nil {
+			// Client not registered - this is OK for host polls
+			handlerCh.Log(alog.DEBUG, "[remote-control] client activity update failed: %v", err)
+		}
+	}
+
+	// Event-driven cleanup: remove inactive clients
+	if s.cfg.ClientTimeoutSeconds > 0 {
+		removed := sess.RemoveInactiveClients(s.clientTimeout)
+		if len(removed) > 0 {
+			handlerCh.Log(alog.DEBUG, "[remote-control] removed inactive clients: %v", removed)
+		}
+	}
+
+	// Read output with adjusted offsets if data was purged
+	stdoutChunks, actualStdoutOffset := sess.ReadOutput(session.StreamStdout, stdoutOffset)
+	stderrChunks, actualStderrOffset := sess.ReadOutput(session.StreamStderr, stderrOffset)
+
+	// Event-driven cleanup: purge consumed output
+	purgedStdout, purgedStderr := sess.PurgeConsumedOutput(s.cfg.MaxInitialBufferBytes)
+	if purgedStdout > 0 || purgedStderr > 0 {
+		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
+	}
 
 	// Merge and sort by timestamp.
 	all := make([]session.OutputChunk, 0, len(stdoutChunks)+len(stderrChunks))
@@ -208,8 +264,9 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, PollOutputResponse{
-		Chunks:      chunks,
-		NextOffsets: map[string]int64{"stdout": nextStdout, "stderr": nextStderr},
+		Chunks:        chunks,
+		NextOffsets:   map[string]int64{"stdout": nextStdout, "stderr": nextStderr},
+		ActualOffsets: map[string]int64{"stdout": actualStdoutOffset, "stderr": actualStderrOffset},
 	})
 }
 
@@ -223,9 +280,15 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract client_id from query parameter (required)
+	clientID := r.URL.Query().Get("client_id")
+	if clientID == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required"})
+		return
+	}
+
 	// Enforce client approval and write permission for stdin.
 	if s.cfg.RequireApproval {
-		clientID, _ := s.clientIdentity(r)
 		if !s.checkClientApproval(sess, clientID, true) {
 			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved or read-only"})
 			return
@@ -245,7 +308,7 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 
 	entry := session.StdinEntry{
 		ID:        uuid.New().String(),
-		Source:    req.Source,
+		Source:    clientID,
 		Data:      data,
 		Timestamp: time.Now(),
 		Status:    session.StdinPending,
@@ -282,6 +345,13 @@ func (s *Server) handleAcceptStdin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
 	}
+
+	// Event-driven cleanup: purge consumed stdin entries
+	purged := sess.PurgeConsumedStdin()
+	if purged > 0 {
+		handlerCh.Log(alog.DEBUG, "[remote-control] purged stdin entries: %d", purged)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

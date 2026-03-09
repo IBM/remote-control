@@ -146,6 +146,17 @@ func TestAppendAndPollOutput(t *testing.T) {
 
 	now := time.Now()
 
+	// Register a client.
+	clientResp := postJSON(t, ts, "/sessions/"+sid+"/clients", nil)
+	var clientRespData struct {
+		ClientID string `json:"client_id"`
+	}
+	decodeJSON(t, clientResp, &clientRespData)
+	clientID := clientRespData.ClientID
+	if clientID == "" {
+		t.Fatalf("expected non-empty client_id")
+	}
+
 	// Append stdout.
 	stdoutData := base64.StdEncoding.EncodeToString([]byte("hello stdout"))
 	resp1 := postJSON(t, ts, "/sessions/"+sid+"/output", AppendOutputRequest{
@@ -168,16 +179,22 @@ func TestAppendAndPollOutput(t *testing.T) {
 		t.Fatalf("expected 204, got %d", resp2.StatusCode)
 	}
 
-	// Poll output.
-	pollResp := getJSON(t, ts, "/sessions/"+sid+"/output?stdout_offset=0&stderr_offset=0")
-	if pollResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", pollResp.StatusCode)
-	}
+	// Poll output with retry to handle async processing (with client_id).
 	var poll PollOutputResponse
-	decodeJSON(t, pollResp, &poll)
+	for i := 0; i < 20; i++ {
+		pollResp := getJSON(t, ts, "/sessions/"+sid+"/output?client_id="+clientID+"&stdout_offset=0&stderr_offset=0")
+		if pollResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", pollResp.StatusCode)
+		}
+		decodeJSON(t, pollResp, &poll)
+		if len(poll.Chunks) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	if len(poll.Chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d", len(poll.Chunks))
+		t.Fatalf("expected 2 chunks, got %d after retries", len(poll.Chunks))
 	}
 
 	// First chunk should be stdout (earlier timestamp).
@@ -196,8 +213,8 @@ func TestAppendAndPollOutput(t *testing.T) {
 		t.Errorf("expected stderr next offset 12, got %d", poll.NextOffsets["stderr"])
 	}
 
-	// Poll again with updated offsets — should get no chunks.
-	pollResp2 := getJSON(t, ts, "/sessions/"+sid+"/output?stdout_offset=12&stderr_offset=12")
+	// Poll again with updated offsets and client_id — should get no chunks.
+	pollResp2 := getJSON(t, ts, "/sessions/"+sid+"/output?client_id="+clientID+"&stdout_offset=12&stderr_offset=12")
 	var poll2 PollOutputResponse
 	decodeJSON(t, pollResp2, &poll2)
 	if len(poll2.Chunks) != 0 {
@@ -214,9 +231,8 @@ func TestStdinEnqueueAndPeek(t *testing.T) {
 
 	// Enqueue stdin.
 	stdinData := base64.StdEncoding.EncodeToString([]byte("ls -la\n"))
-	enqResp := postJSON(t, ts, "/sessions/"+sid+"/stdin", StdinRequest{
-		Source: "test-client",
-		Data:   stdinData,
+	enqResp := postJSON(t, ts, "/sessions/"+sid+"/stdin?client_id=test-client", StdinRequest{
+		Data: stdinData,
 	})
 	if enqResp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", enqResp.StatusCode)

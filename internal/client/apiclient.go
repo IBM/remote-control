@@ -60,8 +60,9 @@ type OutputChunk struct {
 
 // PollOutputResponse is the response from GET /sessions/{id}/output.
 type PollOutputResponse struct {
-	Chunks      []OutputChunk    `json:"chunks"`
-	NextOffsets map[string]int64 `json:"next_offsets"`
+	Chunks        []OutputChunk    `json:"chunks"`
+	NextOffsets   map[string]int64 `json:"next_offsets"`
+	ActualOffsets map[string]int64 `json:"actual_offsets"`
 }
 
 // ErrForbidden is returned when the server rejects a request with 403.
@@ -93,9 +94,13 @@ func (c *APIClient) GetSession(sessionID string) (*SessionInfo, error) {
 }
 
 // PollOutput polls for output chunks at the given offsets.
-func (c *APIClient) PollOutput(sessionID string, stdoutOffset, stderrOffset int64) (*PollOutputResponse, error) {
+// clientID is required for client requests, empty for host requests.
+func (c *APIClient) PollOutput(sessionID, clientID string, stdoutOffset, stderrOffset int64) (*PollOutputResponse, error) {
 	path := fmt.Sprintf("/sessions/%s/output?stdout_offset=%d&stderr_offset=%d",
 		sessionID, stdoutOffset, stderrOffset)
+	if clientID != "" {
+		path += fmt.Sprintf("&client_id=%s", clientID)
+	}
 	resp, err := c.get(path)
 	if err != nil {
 		return nil, err
@@ -108,27 +113,30 @@ func (c *APIClient) PollOutput(sessionID string, stdoutOffset, stderrOffset int6
 	return &result, json.NewDecoder(resp.Body).Decode(&result)
 }
 
-// RegisterClient registers this client with a session and returns the approval status.
-func (c *APIClient) RegisterClient(sessionID, clientID string) (string, error) {
-	resp, err := c.post("/sessions/"+sessionID+"/clients", map[string]string{
-		"client_id": clientID,
-	})
+// RegisterClient registers this client with a session.
+// Server generates and returns the client ID along with approval status.
+func (c *APIClient) RegisterClient(sessionID string) (clientID, status string, err error) {
+	resp, err := c.post("/sessions/"+sessionID+"/clients", map[string]string{})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer drainClose(resp)
 	var result struct {
-		Status string `json:"status"`
+		ClientID string `json:"client_id"`
+		Status   string `json:"status"`
 	}
-	return result.Status, json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", err
+	}
+	return result.ClientID, result.Status, nil
 }
 
 // EnqueueStdin submits stdin data to the server.
 // Returns the entry ID or ErrForbidden if the client is not permitted.
 func (c *APIClient) EnqueueStdin(sessionID, clientID string, data []byte) (string, error) {
-	resp, err := c.post("/sessions/"+sessionID+"/stdin", map[string]string{
-		"source": clientID,
-		"data":   base64.StdEncoding.EncodeToString(data),
+	path := fmt.Sprintf("/sessions/%s/stdin?client_id=%s", sessionID, clientID)
+	resp, err := c.post(path, map[string]string{
+		"data": base64.StdEncoding.EncodeToString(data),
 	})
 	if err != nil {
 		return "", err

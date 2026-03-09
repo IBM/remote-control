@@ -33,14 +33,20 @@ func TestDefaults(t *testing.T) {
 	if cfg.ServerURL != "https://localhost:8443" {
 		t.Errorf("expected default server URL, got %s", cfg.ServerURL)
 	}
-	if !cfg.RequireApproval {
-		t.Error("expected RequireApproval=true by default")
+	if cfg.RequireApproval {
+		t.Error("expected RequireApproval=false by default")
 	}
 	if cfg.DefaultPermission != "read-write" {
 		t.Errorf("expected read-write, got %s", cfg.DefaultPermission)
 	}
-	if cfg.PollIntervalMs != 500 {
-		t.Errorf("expected 500ms poll interval, got %d", cfg.PollIntervalMs)
+	if cfg.PollIntervalMs != 100 {
+		t.Errorf("expected 100ms poll interval, got %d", cfg.PollIntervalMs)
+	}
+	if cfg.ClientTimeoutSeconds != 60 {
+		t.Errorf("expected 60s client timeout, got %d", cfg.ClientTimeoutSeconds)
+	}
+	if cfg.MaxInitialBufferBytes != 1024*1024 {
+		t.Errorf("expected 1MB max initial buffer, got %d", cfg.MaxInitialBufferBytes)
 	}
 }
 

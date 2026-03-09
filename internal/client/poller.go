@@ -17,15 +17,17 @@ const (
 type poller struct {
 	client       *APIClient
 	sessionID    string
+	clientID     string
 	stdoutOffset int64
 	stderrOffset int64
 	interval     time.Duration
 }
 
-func newPoller(client *APIClient, sessionID string) *poller {
+func newPoller(client *APIClient, sessionID, clientID string) *poller {
 	return &poller{
 		client:    client,
 		sessionID: sessionID,
+		clientID:  clientID,
 		interval:  pollInitialInterval,
 	}
 }
@@ -39,7 +41,7 @@ func (p *poller) run(ctx context.Context) {
 			return
 		case <-time.After(p.interval):
 			if err := p.poll(); err != nil {
-				ch.Log(alog.WARNING, "[remote-control] poll error: %v", err)
+				ch.Log(alog.DEBUG, "[remote-control] poll error: %v", err)
 				p.backoff()
 			} else {
 				p.interval = pollInitialInterval
@@ -49,9 +51,21 @@ func (p *poller) run(ctx context.Context) {
 }
 
 func (p *poller) poll() error {
-	result, err := p.client.PollOutput(p.sessionID, p.stdoutOffset, p.stderrOffset)
+	result, err := p.client.PollOutput(p.sessionID, p.clientID, p.stdoutOffset, p.stderrOffset)
 	if err != nil {
 		return err
+	}
+
+	// Check if data was purged (actual offsets differ from requested)
+	if actualStdout, ok := result.ActualOffsets["stdout"]; ok && actualStdout > p.stdoutOffset {
+		ch.Log(alog.DEBUG, "[remote-control] stdout data purged: requested offset %d, actual offset %d (missed %d bytes)",
+			p.stdoutOffset, actualStdout, actualStdout-p.stdoutOffset)
+		p.stdoutOffset = actualStdout
+	}
+	if actualStderr, ok := result.ActualOffsets["stderr"]; ok && actualStderr > p.stderrOffset {
+		ch.Log(alog.DEBUG, "[remote-control] stderr data purged: requested offset %d, actual offset %d (missed %d bytes)",
+			p.stderrOffset, actualStderr, actualStderr-p.stderrOffset)
+		p.stderrOffset = actualStderr
 	}
 
 	// Render chunks sorted by timestamp.
