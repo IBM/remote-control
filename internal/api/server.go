@@ -18,6 +18,7 @@ type Server struct {
 	store         session.Store
 	cfg           *config.Config
 	clientTimeout time.Duration
+	connMgr       *ConnectionManager
 }
 
 // NewServer creates a new Server bound to addr, using the given Store.
@@ -28,6 +29,7 @@ func NewServer(addr string, store session.Store, cfg *config.Config) *Server {
 		store:         store,
 		cfg:           cfg,
 		clientTimeout: time.Duration(cfg.ClientTimeoutSeconds) * time.Second,
+		connMgr:       NewConnectionManager(store),
 	}
 	s.registerRoutes()
 

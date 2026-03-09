@@ -39,6 +39,15 @@ type Config struct {
 	ClientTimeoutSeconds  int    `json:"client_timeout_seconds"`
 	MaxInitialBufferBytes int64  `json:"max_initial_buffer_bytes"`
 
+	// WebSocket configuration
+	EnableWebSocket        bool   `json:"enable_websocket"`
+	WebSocketPath          string `json:"websocket_path"`
+	WebSocketPingInterval  int    `json:"websocket_ping_interval_seconds"`
+	WebSocketPongTimeout   int    `json:"websocket_pong_timeout_seconds"`
+	WSFailureThreshold     int    `json:"ws_failure_threshold"`
+	WSFailureWindow        int    `json:"ws_failure_window_seconds"`
+	WSUpgradeCheckInterval int    `json:"ws_upgrade_check_interval_seconds"`
+
 	Log LoggingConfig `json:"log"`
 }
 
@@ -46,13 +55,20 @@ func defaults() *Config {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".remote-control")
 	return &Config{
-		ConfigDir:             configDir,
-		ServerURL:             "https://localhost:8443",
-		RequireApproval:       false,
-		DefaultPermission:     "read-write",
-		PollIntervalMs:        100,
-		ClientTimeoutSeconds:  60,
-		MaxInitialBufferBytes: 1024 * 1024, // 1MB default
+		ConfigDir:              configDir,
+		ServerURL:              "https://localhost:8443",
+		RequireApproval:        false,
+		DefaultPermission:      "read-write",
+		PollIntervalMs:         100,
+		ClientTimeoutSeconds:   60,
+		MaxInitialBufferBytes:  1024 * 1024, // 1MB default
+		EnableWebSocket:        true,
+		WebSocketPath:          "/ws",
+		WebSocketPingInterval:  30,
+		WebSocketPongTimeout:   10,
+		WSFailureThreshold:     3,
+		WSFailureWindow:        60,
+		WSUpgradeCheckInterval: 10,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

@@ -31,6 +31,9 @@ func readJSON(r *http.Request, v any) error {
 func (s *Server) registerRoutes() {
 	mux := s.mux
 
+	// WebSocket
+	mux.HandleFunc("GET /ws", s.handleWebSocket)
+
 	// Session CRUD
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /sessions", s.handleListSessions)
@@ -154,7 +157,26 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "stream must be 'stdout' or 'stderr'"})
 		return
 	}
+
+	// Get offset before appending
+	offset := sess.StreamOffset(stream)
 	sess.AppendOutput(stream, data, ts)
+
+	// Broadcast to WebSocket subscribers
+	if s.connMgr != nil {
+		payload := OutputChunkPayload{
+			Stream:    string(stream),
+			Data:      base64.StdEncoding.EncodeToString(data),
+			Offset:    offset,
+			Timestamp: ts.Format(time.RFC3339Nano),
+		}
+		payloadData, _ := json.Marshal(payload)
+		s.connMgr.Broadcast(id, WSMessage{
+			Type:      MsgTypeOutputChunk,
+			SessionID: id,
+			Payload:   payloadData,
+		})
+	}
 
 	// Event-driven cleanup: remove inactive clients when host sends new data
 	if s.cfg.ClientTimeoutSeconds > 0 {
@@ -305,6 +327,23 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		Status:    session.StdinPending,
 	}
 	sess.EnqueueStdin(entry)
+
+	// Broadcast to WebSocket subscribers (including host)
+	if s.connMgr != nil {
+		payload := StdinPayload{
+			ID:        entry.ID,
+			Data:      base64.StdEncoding.EncodeToString(entry.Data),
+			Source:    entry.Source,
+			Status:    string(entry.Status),
+			Timestamp: entry.Timestamp.Format(time.RFC3339Nano),
+		}
+		payloadData, _ := json.Marshal(payload)
+		s.connMgr.Broadcast(id, WSMessage{
+			Type:      MsgTypeStdinPending,
+			SessionID: id,
+			Payload:   payloadData,
+		})
+	}
 
 	writeJSON(w, http.StatusCreated, stdinEntryToResponse(&entry))
 }
