@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -26,14 +25,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // readJSON decodes JSON from r.Body into v.
 func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
-}
-
-// sessionID extracts the session ID path segment from the request URL.
-// Expects path like /sessions/{id}/... or /sessions/{id}
-func sessionIDFromPath(path string) string {
-	// path: /sessions/{id}[/...]
-	parts := strings.SplitN(strings.TrimPrefix(path, "/sessions/"), "/", 2)
-	return parts[0]
 }
 
 // handlers wires all HTTP routes onto mux.
