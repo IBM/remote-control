@@ -86,6 +86,7 @@ func (s *Server) readPump(connection *Connection, initialClientID string) {
 			s.handleUnsubscribe(connection, msg)
 
 		case MsgTypeStdinSubmit:
+			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit: %v", msg)
 			if err := s.handleStdinSubmitWS(connection, msg); err != nil {
 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin submit error: %v", err)
 				s.sendError(connection, msg.SessionID, err.Error())
@@ -196,18 +197,21 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 
 	// Verify client is subscribed to this session
 	if !connection.IsSubscribed(msg.SessionID) {
+		wsHandlerCh.Log(alog.DEBUG2, "Connection is not subscribed to session %s", msg.SessionID)
 		return errNotSubscribed(msg.SessionID)
 	}
 
 	// Get session
 	sess, err := s.store.Get(msg.SessionID)
 	if err != nil {
+		wsHandlerCh.Log(alog.DEBUG2, "Failed to get session %s from store", msg.SessionID)
 		return err
 	}
 
 	// Check approval
 	if s.cfg.RequireApproval {
 		if !s.checkClientApproval(sess, msg.ClientID, true) {
+			wsHandlerCh.Log(alog.DEBUG2, "Client %s is not approved", msg.ClientID)
 			return errNotApproved()
 		}
 	}
@@ -215,6 +219,7 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 	// Decode and enqueue stdin
 	data, err := base64.StdEncoding.DecodeString(payload.Data)
 	if err != nil {
+		wsHandlerCh.Log(alog.DEBUG2, "Failed to decode base64 payload: %v", err)
 		return err
 	}
 
@@ -225,6 +230,7 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 		Timestamp: time.Now(),
 		Status:    session.StdinPending,
 	}
+	wsHandlerCh.Log(alog.DEBUG3, "Enqueuing stdin to session", sess.ID)
 	sess.EnqueueStdin(entry)
 
 	// Broadcast to all subscribers (including host)

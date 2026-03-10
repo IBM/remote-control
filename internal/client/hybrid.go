@@ -77,10 +77,10 @@ func (hc *HybridConnection) Start() error {
 
 	// Try WebSocket first
 	if err := hc.ws.Connect(hc.ctx); err != nil {
-		hybridCh.Log(alog.INFO, "[remote-control] WebSocket connection failed, falling back to polling")
+		hybridCh.Log(alog.DEBUG, "[remote-control] WebSocket connection failed: %v, falling back to polling", err)
 		hc.switchToPolling()
 	} else {
-		hybridCh.Log(alog.INFO, "[remote-control] connected via WebSocket")
+		hybridCh.Log(alog.DEBUG, "[remote-control] connected via WebSocket")
 	}
 
 	// Start upgrade check loop

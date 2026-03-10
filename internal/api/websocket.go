@@ -7,9 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/session"
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gorilla/websocket"
+
+	"github.com/gabe-l-hart/remote-control/internal/session"
 )
+
+var connMgrCh = alog.UseChannel("CONNM")
 
 // WSMessage is the top-level WebSocket message format
 type WSMessage struct {
@@ -192,6 +196,7 @@ func (cm *ConnectionManager) Register(clientID string, conn *websocket.Conn) *Co
 	}
 
 	connection := NewConnection(clientID, conn)
+	connMgrCh.Log(alog.DEBUG2, "Registering connection for client [%s]", clientID)
 	cm.connections[clientID] = connection
 	return connection
 }
@@ -280,7 +285,8 @@ func (cm *ConnectionManager) Broadcast(sessionID string, msg WSMessage) {
 		return
 	}
 
-	for _, conn := range clients {
+	for clientConnID, conn := range clients {
+		wsHandlerCh.Log(alog.DEBUG3, "Broadcasting to client connection %s", clientConnID)
 		conn.Send(data)
 	}
 }

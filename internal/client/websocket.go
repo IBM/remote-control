@@ -136,6 +136,7 @@ func (ws *WebSocketConnection) Connect(ctx context.Context) error {
 	}
 
 	// Connect to WebSocket endpoint
+	wsCh.Log(alog.DEBUG2, "Dialing WebSocket at [%s]", ws.url)
 	conn, _, err := dialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("WebSocket dial failed: %w", err)
@@ -147,7 +148,7 @@ func (ws *WebSocketConnection) Connect(ctx context.Context) error {
 	ws.reconnectAttempts = 0
 	ws.mu.Unlock()
 
-	wsCh.Log(alog.INFO, "[remote-control] WebSocket connected to %s", ws.url)
+	wsCh.Log(alog.DEBUG, "[remote-control] WebSocket connected to %s", ws.url)
 
 	// Subscribe to session
 	if err := ws.subscribe(); err != nil {
