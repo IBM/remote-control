@@ -293,15 +293,18 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract client_id from query parameter (required)
+	// Extract client_id from query parameter (optional, for client submissions)
 	clientID := r.URL.Query().Get("client_id")
-	if clientID == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required"})
-		return
-	}
 
-	// Enforce client approval and write permission for stdin.
-	if s.cfg.RequireApproval {
+	// Determine if this is a host submission (no client_id provided)
+	isHostSubmission := clientID == ""
+
+	// Enforce client approval and write permission for non-host submissions
+	if !isHostSubmission && s.cfg.RequireApproval {
+		if clientID == "" {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required for client submissions"})
+			return
+		}
 		if !s.checkClientApproval(sess, clientID, true) {
 			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved or read-only"})
 			return
@@ -319,9 +322,15 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use "host" as source identifier for host submissions
+	source := clientID
+	if isHostSubmission {
+		source = "host"
+	}
+
 	entry := session.StdinEntry{
 		ID:        uuid.New().String(),
-		Source:    clientID,
+		Source:    source,
 		Data:      data,
 		Timestamp: time.Now(),
 		Status:    session.StdinPending,

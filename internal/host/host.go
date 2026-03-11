@@ -248,13 +248,13 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyServerStdin(ctx, stdinPipe, h.client, sessionID)
+		h.proxyLocalStdin(ctx, stdinPipe, h.client, sessionID)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyLocalStdin(ctx, stdinPipe, h.client, sessionID)
+		h.proxyServerStdin(ctx, stdinPipe, h.client, sessionID)
 	}()
 
 	wg.Add(1)
