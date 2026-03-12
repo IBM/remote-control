@@ -2,8 +2,10 @@ package host
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -27,6 +29,9 @@ var ch = alog.UseChannel("HOST")
 type Host struct {
 	cfg    *config.Config
 	client *APIClient
+
+	// WebSocket connection for real-time communication
+	wsHost *WebSocketHost
 
 	// Channel-based approval routing
 	approvalMu     sync.Mutex
@@ -71,6 +76,23 @@ func buildHTTPClient(cfg *config.Config) *http.Client {
 	}
 }
 
+// buildTLSConfig creates a TLS config for WebSocket connections.
+func buildTLSConfig(cfg *config.Config) *tls.Config {
+	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
+		return nil
+	}
+	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
+		cfg.ClientTLS.CertFile,
+		cfg.ClientTLS.KeyFile,
+		cfg.ClientTLS.TrustedCAFile,
+	)
+	if err != nil {
+		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v", err)
+		return nil
+	}
+	return tlsCfg
+}
+
 // Run starts the subprocess specified by command, creates a server session,
 // proxies all I/O, and waits for the process to exit.
 //
@@ -96,6 +118,10 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 // The host terminal is put into raw mode and SIGWINCH is forwarded for resize support.
 func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []string, sessionID string) error {
 	h.writeSideChannel(false, "[remote-control] Session ID: %s\n", sessionID)
+
+	// Establish WebSocket connection
+	h.initWebSocket(ctx, sessionID)
+	defer h.closeWebSocket()
 
 	// Use exec.Command (not CommandContext) — PTY lifecycle is managed manually.
 	// Do NOT set SysProcAttr here: pty.Start sets Setsid/Setctty/Ctty itself,
@@ -141,18 +167,22 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 		}
 	}()
 
+	// Track offsets for output
+	var stdoutOffset int64
+	var stdoutOffsetMu sync.Mutex
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID)
+		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID, h.wsHost, &stdoutOffset, &stdoutOffsetMu)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyLocalStdinRaw(ctx, ptmx, &ptmxMu, h.client, sessionID)
+		h.proxyLocalStdinRaw(ctx, ptmx, &ptmxMu, h.client, sessionID, h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -199,7 +229,6 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 	if err := h.client.CompleteSession(sessionID, exitCode); err != nil {
 		ch.Log(alog.WARNING, "[remote-control] complete session error: %v", err)
 	}
-	// Still in raw mode here (defer restores after return); use \r\n.
 	h.writeSideChannel(true, "[remote-control] Session complete (exit %d)\n", exitCode)
 	return nil
 }
@@ -208,6 +237,10 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 // This is the path taken in tests, CI, and any non-interactive invocation.
 func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command []string, sessionID string) error {
 	h.writeSideChannel(false, "[remote-control] Session ID: %s\n", sessionID)
+
+	// Establish WebSocket connection
+	h.initWebSocket(ctx, sessionID)
+	defer h.closeWebSocket()
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -236,13 +269,13 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout")
+		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout", h.wsHost)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, "stderr")
+		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, "stderr", h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -308,6 +341,58 @@ func (h *Host) writeSideChannel(rawMode bool, format string, args ...any) {
 		msg = strings.ReplaceAll(msg, "\n", "\r\n")
 	}
 	fmt.Fprint(os.Stderr, msg)
+}
+
+// initWebSocket establishes a WebSocket connection for real-time communication.
+func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
+	// Derive WebSocket URL from ServerURL
+	wsURL := h.deriveWebSocketURL(h.cfg.ServerURL)
+
+	// Build TLS config if available
+	tlsCfg := buildTLSConfig(h.cfg)
+
+	// Create WebSocket host connection
+	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, "host")
+
+	// Set up stdin pending handler
+	h.wsHost.OnStdinPending(func(entry StdinEntry) {
+		// WebSocket will broadcast pending stdin entries
+		// This will replace the polling mechanism
+	})
+
+	// Set up error handler
+	h.wsHost.OnError(func(err error) {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket error: %v", err)
+	})
+
+	err := h.wsHost.Connect(ctx)
+	if err != nil {
+		ch.Log(alog.INFO, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
+		h.wsHost = nil
+	}
+}
+
+// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
+func (h *Host) deriveWebSocketURL(httpURL string) string {
+	parsed, err := url.Parse(httpURL)
+	if err != nil {
+		return httpURL
+	}
+
+	if parsed.Scheme == "https" {
+		parsed.Scheme = "wss"
+	} else if parsed.Scheme == "http" {
+		parsed.Scheme = "ws"
+	}
+
+	return parsed.String()
+}
+
+// closeWebSocket gracefully closes the WebSocket connection.
+func (h *Host) closeWebSocket() {
+	if h.wsHost != nil {
+		h.wsHost.Close()
+	}
 }
 
 // armApprovalChannel marks the host as waiting for an approval byte and returns

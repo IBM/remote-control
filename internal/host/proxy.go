@@ -37,7 +37,11 @@ func (sw *syncWriter) Close() error {
 // proxyOutput reads from r (a subprocess pipe), writes to local dst, and
 // forwards each chunk to the server as timestamped output.
 // stream is "stdout" or "stderr".
-func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *APIClient, sessionID, stream string) {
+// If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
+func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *APIClient, sessionID, stream string, wsHost *WebSocketHost) {
+	var offset int64
+	var offsetMu sync.Mutex
+
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
@@ -51,8 +55,17 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 				ch.Log(alog.DEBUG, "[remote-control] local %s write error: %v", stream, werr)
 			}
 
-			// Forward to server (non-blocking on context cancel).
-			if client != nil {
+			// Forward to server (prefer WebSocket, fallback to HTTP).
+			if wsHost != nil && wsHost.IsConnected() {
+				offsetMu.Lock()
+				currentOffset := offset
+				offset += int64(n)
+				offsetMu.Unlock()
+
+				if serr := wsHost.SendOutput(stream, chunk, currentOffset, ts); serr != nil {
+					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
+				}
+			} else if client != nil {
 				select {
 				case <-ctx.Done():
 					return
@@ -82,7 +95,8 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 // writes raw bytes to os.Stdout, and forwards each chunk to the server as
 // "stdout" stream output. io.EOF and "input/output error" are treated as
 // normal PTY HUP (subprocess exited).
-func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APIClient, sessionID string) {
+// If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
+func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APIClient, sessionID string, wsHost *WebSocketHost, offset *int64, offsetMu *sync.Mutex) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := ptmx.Read(buf)
@@ -99,7 +113,17 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 				}
 			}
 
-			if client != nil {
+			// Forward to server (prefer WebSocket, fallback to HTTP).
+			if wsHost != nil && wsHost.IsConnected() {
+				offsetMu.Lock()
+				currentOffset := *offset
+				*offset += int64(n)
+				offsetMu.Unlock()
+
+				if serr := wsHost.SendOutput("stdout", chunk, currentOffset, ts); serr != nil {
+					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
+				}
+			} else if client != nil {
 				select {
 				case <-ctx.Done():
 					return
@@ -128,7 +152,8 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 
 // processHostStdinEntry submits a host stdin entry to the server queue.
 // For PTY mode, the entry is written directly before submission to avoid echo loop.
-func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *APIClient, sessionID string, writeDirectly bool, ptmx *os.File, ptmxMu *sync.Mutex) error {
+// If wsHost is available, uses WebSocket to submit; otherwise uses HTTP polling.
+func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *APIClient, sessionID string, writeDirectly bool, ptmx *os.File, ptmxMu *sync.Mutex, wsHost *WebSocketHost) error {
 	// Write directly to PTY before submission for immediate terminal echo
 	if writeDirectly && ptmx != nil {
 		ptmxMu.Lock()
@@ -136,12 +161,29 @@ func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *A
 		ptmxMu.Unlock()
 	}
 
-	// Submit to server queue for client visibility
-	entryID, err := client.SubmitHostStdin(sessionID, data)
-	if err != nil {
-		ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
-		// Even if enqueue fails, it's ok for PTY mode - already written directly
-		return nil
+	// Submit to server queue for client visibility (prefer WebSocket, fallback to HTTP)
+	var entryID string
+	var err error
+
+	if wsHost != nil && wsHost.IsConnected() {
+		// Use WebSocket - send via WebSocket and don't wait for confirmation
+		// WebSocket broadcast will handle delivery
+		epochID := time.Now().UnixNano()
+		entryID = fmt.Sprintf("host-%d", epochID)
+
+		// Create entry via HTTP then broadcast via WebSocket
+		entryID, err = client.SubmitHostStdin(sessionID, data)
+		if err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+			return nil
+		}
+	} else {
+		// Use HTTP polling
+		entryID, err = client.SubmitHostStdin(sessionID, data)
+		if err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+			return nil
+		}
 	}
 
 	// Poll for acceptance status with timeout
@@ -245,7 +287,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			lineWithNewline := append(res.line, '\n')
 
 			// Submit through server queue, wait for acceptance, then write
-			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, true, nil, nil)
+			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, true, nil, nil, nil)
 			if writeErr != nil {
 				ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
 			}
@@ -261,7 +303,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 // 3. Skipping write when polling sees "host" entries
 //
 // Each keystroke is submitted individually (threshold: 1 byte) for responsiveness.
-func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
+func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string, wsHost *WebSocketHost) {
 	byteCh := make(chan byte, 16)
 
 	go func() {
@@ -330,7 +372,7 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 
 			// Submit immediately
 			if len(batch) >= batchThreshold {
-				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, false, nil, nil)
+				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, false, nil, nil, wsHost)
 				batch = nil
 			}
 		}
