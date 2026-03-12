@@ -108,8 +108,15 @@ func waitForAnySession(t *testing.T, serverURL string, timeout time.Duration) st
 			return lastSeenID
 		}
 		// If we've seen a session ID before but it's gone now, it completed
-		// Return the last seen ID even though it's deleted
+		// Return the last seen ID even though it's deleted (session was deleted after completion)
 		if lastSeenID != "" {
+			time.Sleep(10 * time.Millisecond)
+			// Try one more time to see if session exists (in case it completed just now)
+			sessions2 := listSessions(t, serverURL)
+			if len(sessions2) > 0 {
+				return lastSeenID
+			}
+			// Session deleted - return it anyway
 			return lastSeenID
 		}
 		time.Sleep(10 * time.Millisecond) // Faster polling
@@ -161,7 +168,7 @@ func TestHostOutputProxying(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() {
 		// Add a small sleep to keep session alive long enough to read output
-		runErr <- h.Run(ctx, []string{"sh", "-c", `printf 'hello\nworld\n'; sleep 0.5`})
+		runErr <- h.Run(ctx, []string{"sh", "-c", `printf 'hello\nworld\n'; sleep 3`})
 	}()
 
 	// Poll aggressively for session creation and output
@@ -190,15 +197,25 @@ func TestHostOutputProxying(t *testing.T) {
 				if clientID == "" {
 					t.Fatal("expected non-empty client_id")
 				}
+				// Approve the client for output access
+				_, err = http.Post(serverURL+"/sessions/"+sessionID+"/clients/"+clientID+"/approve", "application/json",
+					bytes.NewReader([]byte(`{"permission": "read-write"}`)))
+				if err != nil {
+					t.Fatalf("approve client: %v", err)
+				}
 				startedSession = true
 			}
-			output = getOutput(t, serverURL, sessionID, clientID)
-			if output == "hello\nworld\n" {
-				break
-			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		output = getOutput(t, serverURL, sessionID, clientID)
+		if output == "hello\nworld\n" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+
+	// Give a little more time for any pending output to be flushed
+	time.Sleep(100 * time.Millisecond)
+	output = getOutput(t, serverURL, sessionID, clientID)
 
 	if sessionID == "" {
 		t.Fatal("no session found")

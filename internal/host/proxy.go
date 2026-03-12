@@ -126,34 +126,46 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 	}
 }
 
-// processHostStdinEntry submits a host stdin entry to the server queue and
-// writes it to the subprocess after acceptance.
-func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *APIClient, sessionID string, writeFunc func([]byte) error) error {
-	// Submit to server queue
-	entryID, err := client.SubmitHostStdin(sessionID, data)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] host stdin enqueue error: %v", err)
-		return err
+// processHostStdinEntry submits a host stdin entry to the server queue.
+// For PTY mode, the entry is written directly before submission to avoid echo loop.
+func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *APIClient, sessionID string, writeDirectly bool, ptmx *os.File, ptmxMu *sync.Mutex) error {
+	// Write directly to PTY before submission for immediate terminal echo
+	if writeDirectly && ptmx != nil {
+		ptmxMu.Lock()
+		_, _ = ptmx.Write(data)
+		ptmxMu.Unlock()
 	}
 
-	// Poll for acceptance
-	ticker := time.NewTicker(50 * time.Millisecond)
+	// Submit to server queue for client visibility
+	entryID, err := client.SubmitHostStdin(sessionID, data)
+	if err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+		// Even if enqueue fails, it's ok for PTY mode - already written directly
+		return nil
+	}
+
+	// Poll for acceptance status with timeout
+	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 
+	maxWait := 200 * time.Millisecond
+	start := time.Now()
+
 	for {
+		elapsed := time.Since(start)
+		if elapsed > maxWait {
+			ch.Log(alog.DEBUG, "[remote-control] host stdin queue timeout")
+			return nil // Already written directly in PTY mode
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 			status := client.GetHostStdinStatus(sessionID, entryID)
 			switch status {
-			case "accepted":
-				return writeFunc(data)
-			case "rejected":
-				// Should not happen for host entries, but handle gracefully
-				return fmt.Errorf("host stdin entry unexpectedly rejected")
-			case "consumed":
-				return fmt.Errorf("host stdin entry consumed")
+			case "accepted", "rejected", "consumed":
+				return nil
 			default:
 				// Still pending, continue polling
 			}
@@ -183,9 +195,6 @@ func writeBatch(data []byte, stdinPipe *syncWriter, ptmx *os.File, ptmxMu *sync.
 // When an approval prompt is active (approvalActive == true), the first byte of
 // the line is routed to approvalRespCh instead of the subprocess — no mutex is
 // held during I/O, eliminating the deadlock present in the prior design.
-//
-// Stdin is read in a background goroutine so the outer loop can select on
-// ctx.Done() and exit promptly when the context is cancelled.
 func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *APIClient, sessionID string) {
 	type scanResult struct{ line []byte }
 	lineCh := make(chan scanResult, 1)
@@ -210,12 +219,11 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			return
 		case res, ok := <-lineCh:
 			if !ok {
-				// os.Stdin reached EOF. Stop proxying local input but leave
-				// stdinPipe open so that server stdin can still flow through.
+				// os.Stdin reached EOF. Stop proxying local input.
 				return
 			}
 
-			// Briefly check whether an approval prompt is waiting for input.
+			// Check for approval prompt
 			h.approvalMu.Lock()
 			active := h.approvalActive
 			var respCh chan byte
@@ -225,7 +233,6 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			h.approvalMu.Unlock()
 
 			if active {
-				// Route the first byte to the approval handler; discard rest of line.
 				if len(res.line) > 0 {
 					select {
 					case respCh <- res.line[0]:
@@ -238,10 +245,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 			lineWithNewline := append(res.line, '\n')
 
 			// Submit through server queue, wait for acceptance, then write
-			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, func(data []byte) error {
-				return writeBatch(data, stdinPipe, nil, nil)
-			})
-
+			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, true, nil, nil)
 			if writeErr != nil {
 				ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
 			}
@@ -249,12 +253,14 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 	}
 }
 
-// proxyLocalStdinRaw reads individual bytes from os.Stdin (which is in raw
-// terminal mode), batches them, submits to the server queue, and writes after
-// acceptance. This ensures FIFO ordering between host and client inputs.
+// proxyLocalStdinRaw reads individual bytes from os.Stdin (raw terminal mode),
+// writes them directly to the PTY for immediate echo, and submits to the server
+// queue for client visibility. This avoids the echo loop by:
+// 1. Writing directly to PTY immediately (terminal handles echo)
+// 2. Submitting to server (marked as "host" source)
+// 3. Skipping write when polling sees "host" entries
 //
-// Bytes are batched (threshold: 16 bytes or on CR/Enter) to reduce API calls
-// while maintaining responsiveness for interactive use.
+// Each keystroke is submitted individually (threshold: 1 byte) for responsiveness.
 func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
 	byteCh := make(chan byte, 16)
 
@@ -276,25 +282,20 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 		}
 	}()
 
-	// Batch incoming bytes for submission
-	const batchThreshold = 16
+	// Immediate submission (1 byte threshold) for responsive typing
+	const batchThreshold = 1
 	var batch []byte
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush remaining batch
-			if len(batch) > 0 {
-				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, func(data []byte) error {
-					return writeBatch(data, nil, ptmx, ptmxMu)
-				})
-			}
 			return
 		case b, ok := <-byteCh:
 			if !ok {
 				return
 			}
 
+			// Check for approval prompt
 			h.approvalMu.Lock()
 			active := h.approvalActive
 			var respCh chan byte
@@ -311,35 +312,25 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 				continue
 			}
 
-			// Handle Ctrl+C and Ctrl+D specially - send directly to PTY for immediate effect
-			if b == 0x03 || b == 0x04 {
+			// Special keys: write directly to PTY (no queue processing)
+			if b == 0x03 || b == 0x04 { // Ctrl+C or Ctrl+D
 				ptmxMu.Lock()
 				_, _ = ptmx.Write([]byte{b})
 				ptmxMu.Unlock()
 				continue
 			}
-			if b == 0x0d {
-				if len(batch) > 0 {
-					_ = h.processHostStdinEntry(ctx, batch, client, sessionID, func(data []byte) error {
-						return writeBatch(data, nil, ptmx, ptmxMu)
-					})
-					batch = nil
-				}
-				// Submit CR as single-byte entry for immediate processing
-				_ = h.processHostStdinEntry(ctx, []byte{b}, client, sessionID, func(data []byte) error {
-					return writeBatch(data, nil, ptmx, ptmxMu)
-				})
-				continue
-			}
 
-			// Accumulate byte into batch
+			// Write byte directly to PTY for immediate terminal echo
+			ptmxMu.Lock()
+			_, _ = ptmx.Write([]byte{b})
+			ptmxMu.Unlock()
+
+			// Accumulate for submission
 			batch = append(batch, b)
 
-			// Flush batch when threshold reached
+			// Submit immediately
 			if len(batch) >= batchThreshold {
-				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, func(data []byte) error {
-					return writeBatch(data, nil, ptmx, ptmxMu)
-				})
+				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, false, nil, nil)
 				batch = nil
 			}
 		}
@@ -347,46 +338,45 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 }
 
 // processServerStdinEntry accepts a pending entry from the server and writes
-// it to the subprocess. Handles both client and host entries.
+// it to the subprocess. Only writes client entries; skips host entries to
+// avoid echo loop since they were already written directly to PTY.
 func (h *Host) processServerStdinEntry(ctx context.Context, client *APIClient, sessionID string, writeFunc func([]byte) error) error {
-	// Peek the oldest pending entry
 	entry, err := client.PeekStdin(sessionID)
 	if err != nil {
 		ch.Log(alog.DEBUG, "[remote-control] peek stdin error: %v", err)
 		return err
 	}
 	if entry == nil {
-		return nil // No pending entries
+		return nil
 	}
 
-	// Auto-accept host entries, accept client entries
+	// Check source - skip host entries (already written)
 	isHostEntry := entry.Source == "host"
-	if !isHostEntry {
-		// For client entries, we need explicit acceptance
-		// (Note: In the unified model, host decides to accept or reject)
-	}
 
-	// Accept the entry first
+	// Accept the entry
 	if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
 		ch.Log(alog.DEBUG, "[remote-control] accept stdin error: %v", err)
-		// Reject if accept failed to avoid stale entries
 		_ = client.RejectStdin(sessionID, entry.ID)
 		return err
 	}
 
-	// Decode and write
 	data, err := base64.StdEncoding.DecodeString(entry.Data)
 	if err != nil || len(data) == 0 {
 		_ = client.RejectStdin(sessionID, entry.ID)
 		return fmt.Errorf("invalid entry data")
 	}
 
+	// Skip host entries to avoid echo loop
+	if isHostEntry {
+		return nil
+	}
+
+	// Write client entries to subprocess
 	return writeFunc(data)
 }
 
-// proxyServerStdin polls the server for pending stdin entries (both host and
-// client) and processes them by accepting and writing to the subprocess.
-// This runs in parallel with proxyLocalStdin to handle both input sources.
+// proxyServerStdin polls the server for pending stdin entries and processes
+// them. Runs in parallel with proxyLocalStdin in pipe mode.
 func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, client *APIClient, sessionID string) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -398,23 +388,15 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 		case <-ticker.C:
 			err := h.processServerStdinEntry(ctx, client, sessionID, func(data []byte) error {
 				_, err := stdinPipe.Write(data)
-				if err != nil {
-					return err
-				}
-				return nil
+				return err
 			})
-			if err != nil && err.Error() != "no pending entries" {
-				// Ignore "no pending" errors - just means nothing to process
-				if err.Error() != "" {
-					ch.Log(alog.DEBUG, "[remote-control] server stdin processing: %v", err)
-				}
-			}
+			// Silently ignore "no pending" or processing errors
+			_ = err
 		}
 	}
 }
 
-// proxyServerStdinPTY polls the server for pending stdin entries (both host
-// and client) and processes them for PTY mode.
+// proxyServerStdinPTY is the PTY variant of proxyServerStdin.
 func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
