@@ -39,6 +39,13 @@ type HybridConnection struct {
 	wg     sync.WaitGroup
 }
 
+// WebSocket returns the underlying WebSocket connection (for callbacks)
+func (hc *HybridConnection) WebSocket() *WebSocketConnection {
+	hc.modeMu.RLock()
+	defer hc.modeMu.RUnlock()
+	return hc.ws
+}
+
 // NewHybridConnection creates a new hybrid connection
 func NewHybridConnection(
 	wsURL string,

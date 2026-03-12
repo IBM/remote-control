@@ -162,10 +162,14 @@ func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *A
 	}
 
 	// Submit to server queue for client visibility (prefer WebSocket, fallback to HTTP)
-	// var entryID string
-	if _, err := client.SubmitHostStdin(sessionID, data); nil != err {
-		ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
-		return nil
+	if wsHost != nil && wsHost.IsConnected() {
+		if err := wsHost.SubmitStdin(data); err != nil {
+			wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket submit stdin error: %v", err)
+		}
+	} else if client != nil {
+		if _, err := client.SubmitHostStdin(sessionID, data); err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+		}
 	}
 
 	return nil

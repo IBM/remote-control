@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -381,7 +382,8 @@ func (ws *WebSocketConnection) isStreamCorruption(err error) bool {
 // SubmitStdin sends stdin data via WebSocket
 func (ws *WebSocketConnection) SubmitStdin(data string) error {
 	payload := StdinPayload{
-		Data: data,
+		Data:   base64.StdEncoding.EncodeToString([]byte(data)),
+		Source: "client",
 	}
 	payloadData, _ := json.Marshal(payload)
 

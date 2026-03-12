@@ -38,6 +38,7 @@ const (
 	MsgTypeUnsubscribe      = "unsubscribe"
 	MsgTypeStdinAccept      = "stdin_accept"
 	MsgTypeStdinReject      = "stdin_reject"
+	MsgTypeStdinSubmit      = "stdin_submit"
 	MsgTypePing             = "ping"
 )
 
@@ -415,6 +416,36 @@ func (wh *WebSocketHost) RejectStdin(entryID string) error {
 	msg := WSMessage{
 		Type:      MsgTypeStdinReject,
 		SessionID: wh.sessionID,
+		Payload:   payloadData,
+	}
+
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case wh.send <- msgData:
+		return nil
+	case <-wh.done:
+		return fmt.Errorf("connection closed")
+	default:
+		return fmt.Errorf("send buffer full")
+	}
+}
+
+// SubmitStdin submits host stdin data directly via WebSocket
+func (wh *WebSocketHost) SubmitStdin(data []byte) error {
+	payload := StdinPayload{
+		Data:   base64.StdEncoding.EncodeToString(data),
+		Source: "host",
+	}
+	payloadData, _ := json.Marshal(payload)
+
+	msg := WSMessage{
+		Type:      MsgTypeStdinSubmit,
+		SessionID: wh.sessionID,
+		ClientID:  wh.clientID,
 		Payload:   payloadData,
 	}
 
