@@ -24,7 +24,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // readJSON decodes JSON from r.Body into v.
 func readJSON(r *http.Request, v any) error {
-	return json.NewDecoder(r.Body).Decode(v)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
 }
 
 // handlers wires all HTTP routes onto mux.
