@@ -345,6 +345,13 @@ func (h *Host) writeSideChannel(rawMode bool, format string, args ...any) {
 
 // initWebSocket establishes a WebSocket connection for real-time communication.
 func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
+	// Check if WebSocket is enabled in config
+	if !h.cfg.EnableWebSocket {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket disabled, using HTTP polling mode")
+		h.wsHost = nil
+		return
+	}
+
 	// Derive WebSocket URL from ServerURL
 	wsURL := h.deriveWebSocketURL(h.cfg.ServerURL)
 
@@ -367,7 +374,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 
 	err := h.wsHost.Connect(ctx)
 	if err != nil {
-		ch.Log(alog.INFO, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
 		h.wsHost = nil
 	}
 }

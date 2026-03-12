@@ -287,6 +287,7 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	handlerCh.Log(alog.DEBUG3, "Handling stdin for session [%s]", id)
 	sess, err := s.store.Get(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
