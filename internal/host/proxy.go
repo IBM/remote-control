@@ -311,7 +311,13 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 				continue
 			}
 
-			// Handle CR - flush any accumulated batch first, then submit CR as separate entry
+			// Handle Ctrl+C and Ctrl+D specially - send directly to PTY for immediate effect
+			if b == 0x03 || b == 0x04 {
+				ptmxMu.Lock()
+				_, _ = ptmx.Write([]byte{b})
+				ptmxMu.Unlock()
+				continue
+			}
 			if b == 0x0d {
 				if len(batch) > 0 {
 					_ = h.processHostStdinEntry(ctx, batch, client, sessionID, func(data []byte) error {
