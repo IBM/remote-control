@@ -11,13 +11,17 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/api"
 	"github.com/gabe-l-hart/remote-control/internal/config"
 	"github.com/gabe-l-hart/remote-control/internal/host"
 	"github.com/gabe-l-hart/remote-control/internal/session"
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
 
 // testServer starts a real HTTP server on a free port and returns its URL.
@@ -26,7 +30,7 @@ func testServer(t *testing.T) string {
 	t.Helper()
 
 	store, _ := session.NewStore("memory", session.StoreOptions{})
-	cfg := &config.Config{RequireApproval: false}
+	cfg := &config.Config{RequireApproval: false, MaxInitialBufferBytes: 1024}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -55,6 +59,7 @@ func newTestHost(t *testing.T, serverURL string) *host.Host {
 	cfg := &config.Config{
 		ServerURL:       serverURL,
 		RequireApproval: false,
+		EnableWebSocket: false, // Disable WebSocket in tests for HTTP-only mode
 	}
 	return host.NewHost(cfg)
 }
@@ -108,8 +113,15 @@ func waitForAnySession(t *testing.T, serverURL string, timeout time.Duration) st
 			return lastSeenID
 		}
 		// If we've seen a session ID before but it's gone now, it completed
-		// Return the last seen ID even though it's deleted
+		// Return the last seen ID even though it's deleted (session was deleted after completion)
 		if lastSeenID != "" {
+			time.Sleep(10 * time.Millisecond)
+			// Try one more time to see if session exists (in case it completed just now)
+			sessions2 := listSessions(t, serverURL)
+			if len(sessions2) > 0 {
+				return lastSeenID
+			}
+			// Session deleted - return it anyway
 			return lastSeenID
 		}
 		time.Sleep(10 * time.Millisecond) // Faster polling
@@ -158,10 +170,27 @@ func TestHostOutputProxying(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Make a temporary dir for command end sentinel file
+	workdir, err := os.MkdirTemp("", "test")
+	if nil != err {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workdir)
+
 	runErr := make(chan error, 1)
+	sentinelPath := filepath.Join(workdir, "done")
+	outputText := "hello"
 	go func() {
-		// Add a small sleep to keep session alive long enough to read output
-		runErr <- h.Run(ctx, []string{"sh", "-c", `printf 'hello\nworld\n'; sleep 0.5`})
+		// Print, then wait for the sentinel file to show up to terminate
+		cmd := fmt.Sprintf(`printf '%s'; while ! [ -f %s ]; do sleep 0.05; done`, outputText, sentinelPath)
+		runErr <- h.Run(ctx, []string{"sh", "-c", cmd})
+	}()
+	// In case the test terminates early, make sure the child process does too
+	defer func() {
+		os.Create(sentinelPath)
+		// Make sure there is time for it to terminate before deferred cleanup
+		// removes the workdir
+		time.Sleep(50 * time.Millisecond)
 	}()
 
 	// Poll aggressively for session creation and output
@@ -169,8 +198,9 @@ func TestHostOutputProxying(t *testing.T) {
 	var output string
 	var sessionID string
 	var clientID string
-	var startedSession bool
+	var startedSession bool = false
 
+	// First, wait for session to appear and register client
 	for time.Now().Before(deadline) {
 		sessions := listSessions(t, serverURL)
 		if len(sessions) > 0 {
@@ -190,23 +220,48 @@ func TestHostOutputProxying(t *testing.T) {
 				if clientID == "" {
 					t.Fatal("expected non-empty client_id")
 				}
+				// Approve the client for output access
+				_, err = http.Post(serverURL+"/sessions/"+sessionID+"/clients/"+clientID+"/approve", "application/json",
+					bytes.NewReader([]byte(`{"permission": "read-write"}`)))
+				if err != nil {
+					t.Fatalf("approve client: %v", err)
+				}
 				startedSession = true
-			}
-			output = getOutput(t, serverURL, sessionID, clientID)
-			if output == "hello\nworld\n" {
-				break
+				testmain.TestCh.Log(alog.DEBUG, "Client connected!")
+				break // Client registered, now collect output
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	if sessionID == "" {
 		t.Fatal("no session found")
 	}
-
-	if output != "hello\nworld\n" {
-		t.Errorf("expected %q, got %q", "hello\nworld\n", output)
+	if !startedSession {
+		t.Fatal("failed to connect client")
 	}
+
+	// Now collect output after client is registered
+	outputDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(outputDeadline) {
+		output = getOutput(t, serverURL, sessionID, clientID)
+		if output == outputText {
+			break
+		}
+		// Verify session still exists
+		sessions := listSessions(t, serverURL)
+		if len(sessions) == 0 {
+			t.Fatal("session deleted before output received")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if output != outputText {
+		t.Errorf("expected %q, got %q", "hello", output)
+	}
+
+	// Make the sentinel file to stop the process
+	os.Create(sentinelPath)
 
 	select {
 	case err := <-runErr:
@@ -224,6 +279,8 @@ func TestHostOutputProxying(t *testing.T) {
 		t.Errorf("expected 404 after completion (session deleted), got %d", resp.StatusCode)
 	}
 }
+
+// TestHostOutputProxyingWithClientApproval tests the full workflow.
 
 // TestHostStdinRouting verifies that stdin enqueued via the server API is
 // forwarded to the subprocess and appears in the session output.
@@ -391,4 +448,10 @@ func TestHostSessionCompleted(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 after completion (session deleted), got %d", resp.StatusCode)
 	}
+}
+
+// TestMain ////////////////////////////////////////////////////////////////////
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
 }

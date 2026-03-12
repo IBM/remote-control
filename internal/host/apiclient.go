@@ -232,3 +232,39 @@ func (c *APIClient) DenyClient(sessionID, clientID string) error {
 	drainClose(resp)
 	return nil
 }
+
+// SubmitHostStdin submits host stdin entries through the server queue.
+func (c *APIClient) SubmitHostStdin(sessionID string, data []byte) (string, error) {
+	body := map[string]string{
+		"source": "host",
+		"data":   base64.StdEncoding.EncodeToString(data),
+	}
+	resp, err := c.post("/sessions/"+sessionID+"/stdin", body)
+	if err != nil {
+		return "", err
+	}
+	defer drainClose(resp)
+	var result struct {
+		ID string `json:"id"`
+	}
+	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// GetHostStdinStatus polls for the status of a host-submitted stdin entry.
+func (c *APIClient) GetHostStdinStatus(sessionID, entryID string) string {
+	resp, err := c.get("/sessions/" + sessionID + "/stdin/" + entryID + "/status")
+	if err != nil {
+		return "pending"
+	}
+	defer drainClose(resp)
+	if resp.StatusCode == http.StatusNotFound {
+		return "consumed"
+	}
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "pending"
+	}
+	return result.Status
+}

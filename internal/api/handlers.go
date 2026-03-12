@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -28,17 +27,12 @@ func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// sessionID extracts the session ID path segment from the request URL.
-// Expects path like /sessions/{id}/... or /sessions/{id}
-func sessionIDFromPath(path string) string {
-	// path: /sessions/{id}[/...]
-	parts := strings.SplitN(strings.TrimPrefix(path, "/sessions/"), "/", 2)
-	return parts[0]
-}
-
 // handlers wires all HTTP routes onto mux.
 func (s *Server) registerRoutes() {
 	mux := s.mux
+
+	// WebSocket
+	mux.HandleFunc("GET /ws", s.handleWebSocket)
 
 	// Session CRUD
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
@@ -163,7 +157,26 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "stream must be 'stdout' or 'stderr'"})
 		return
 	}
+
+	// Get offset before appending
+	offset := sess.StreamOffset(stream)
 	sess.AppendOutput(stream, data, ts)
+
+	// Broadcast to WebSocket subscribers
+	if s.connMgr != nil {
+		payload := OutputChunkPayload{
+			Stream:    string(stream),
+			Data:      base64.StdEncoding.EncodeToString(data),
+			Offset:    offset,
+			Timestamp: ts.Format(time.RFC3339Nano),
+		}
+		payloadData, _ := json.Marshal(payload)
+		s.connMgr.Broadcast(id, WSMessage{
+			Type:      MsgTypeOutputChunk,
+			SessionID: id,
+			Payload:   payloadData,
+		})
+	}
 
 	// Event-driven cleanup: remove inactive clients when host sends new data
 	if s.cfg.ClientTimeoutSeconds > 0 {
@@ -274,21 +287,25 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	handlerCh.Log(alog.DEBUG3, "Handling stdin for session [%s]", id)
 	sess, err := s.store.Get(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	// Extract client_id from query parameter (required)
+	// Extract client_id from query parameter (optional, for client submissions)
 	clientID := r.URL.Query().Get("client_id")
-	if clientID == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required"})
-		return
-	}
 
-	// Enforce client approval and write permission for stdin.
-	if s.cfg.RequireApproval {
+	// Determine if this is a host submission (no client_id provided)
+	isHostSubmission := clientID == ""
+
+	// Enforce client approval and write permission for non-host submissions
+	if !isHostSubmission && s.cfg.RequireApproval {
+		if clientID == "" {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required for client submissions"})
+			return
+		}
 		if !s.checkClientApproval(sess, clientID, true) {
 			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved or read-only"})
 			return
@@ -306,14 +323,37 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use "host" as source identifier for host submissions
+	source := clientID
+	if isHostSubmission {
+		source = "host"
+	}
+
 	entry := session.StdinEntry{
 		ID:        uuid.New().String(),
-		Source:    clientID,
+		Source:    source,
 		Data:      data,
 		Timestamp: time.Now(),
 		Status:    session.StdinPending,
 	}
 	sess.EnqueueStdin(entry)
+
+	// Broadcast to WebSocket subscribers (including host)
+	if s.connMgr != nil {
+		payload := StdinPayload{
+			ID:        entry.ID,
+			Data:      base64.StdEncoding.EncodeToString(entry.Data),
+			Source:    entry.Source,
+			Status:    string(entry.Status),
+			Timestamp: entry.Timestamp.Format(time.RFC3339Nano),
+		}
+		payloadData, _ := json.Marshal(payload)
+		s.connMgr.Broadcast(id, WSMessage{
+			Type:      MsgTypeStdinPending,
+			SessionID: id,
+			Payload:   payloadData,
+		})
+	}
 
 	writeJSON(w, http.StatusCreated, stdinEntryToResponse(&entry))
 }

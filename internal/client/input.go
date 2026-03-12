@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"golang.org/x/term"
@@ -76,7 +75,7 @@ func (ir *inputReader) runRaw(ctx context.Context) {
 			continue
 		}
 
-		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
+		_, err = ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
 		if err != nil {
 			if errors.Is(err, ErrForbidden) {
 				ch.Log(alog.WARNING, "[remote-control] stdin not permitted")
@@ -87,7 +86,7 @@ func (ir *inputReader) runRaw(ctx context.Context) {
 		}
 
 		// Poll for acceptance or rejection in background.
-		go ir.watchStatus(ctx, entryID)
+		// go ir.watchStatus(ctx, entryID)
 	}
 }
 
@@ -192,7 +191,7 @@ func (ir *inputReader) runCooked(ctx context.Context) {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		entryID, err := ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
+		_, err = ir.client.EnqueueStdin(ir.sessionID, ir.clientID, data)
 		if err != nil {
 			if errors.Is(err, ErrForbidden) {
 				fmt.Fprintf(os.Stderr, "[remote-control] stdin not permitted (read-only or not approved)\n")
@@ -200,31 +199,6 @@ func (ir *inputReader) runCooked(ctx context.Context) {
 				ch.Log(alog.WARNING, "[remote-control] enqueue stdin error: %v", err)
 			}
 			continue
-		}
-
-		// Poll for acceptance or rejection.
-		go ir.watchStatus(ctx, entryID)
-	}
-}
-
-// watchStatus polls the server until the entry is accepted or rejected.
-func (ir *inputReader) watchStatus(ctx context.Context, entryID string) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
-			status, err := ir.client.GetStdinStatus(ir.sessionID, entryID)
-			if err != nil {
-				return
-			}
-			switch status {
-			case "accepted":
-				return
-			case "rejected":
-				fmt.Fprintf(os.Stderr, "[remote-control] Input rejected — host submitted input first\n")
-				return
-			}
 		}
 	}
 }

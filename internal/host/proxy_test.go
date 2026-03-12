@@ -74,8 +74,8 @@ func TestProxyOutputWritesLocally(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Pass nil client — proxyOutput will log the append error but continue writing locally.
-		h.proxyOutput(ctx, pr, localDst, nil, "test-session", "stdout")
+		// Pass nil client and nil WebSocketHost — proxyOutput will log the append error but continue writing locally.
+		h.proxyOutput(ctx, pr, localDst, nil, "test-session", "stdout", nil)
 	}()
 
 	pw.Write([]byte("hello world")) //nolint:errcheck
