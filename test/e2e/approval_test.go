@@ -33,9 +33,11 @@ func TestClientApprovalFlow(t *testing.T) {
 	serverURL := approvalServer(t)
 
 	// Create a session.
-	createBody, _ := json.Marshal(map[string]any{"command": []string{"bash"}})
+	createBody, _ := json.Marshal(map[string]any{})
 	resp, _ := http.Post(serverURL+"/sessions", "application/json", bytes.NewReader(createBody))
-	var sess struct{ ID string `json:"id"` }
+	var sess struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(resp.Body).Decode(&sess)
 	resp.Body.Close()
 
@@ -75,7 +77,9 @@ func TestClientApprovalFlow(t *testing.T) {
 
 	// Pending list should now be empty.
 	listResp2, _ := http.Get(serverURL + "/sessions/" + sess.ID + "/clients?status=pending")
-	var clients2 []struct{ ClientID string `json:"client_id"` }
+	var clients2 []struct {
+		ClientID string `json:"client_id"`
+	}
 	json.NewDecoder(listResp2.Body).Decode(&clients2)
 	listResp2.Body.Close()
 	if len(clients2) != 0 {
@@ -86,9 +90,11 @@ func TestClientApprovalFlow(t *testing.T) {
 func TestClientDenyFlow(t *testing.T) {
 	serverURL := approvalServer(t)
 
-	createBody, _ := json.Marshal(map[string]any{"command": []string{"bash"}})
+	createBody, _ := json.Marshal(map[string]any{})
 	resp, _ := http.Post(serverURL+"/sessions", "application/json", bytes.NewReader(createBody))
-	var sess struct{ ID string `json:"id"` }
+	var sess struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(resp.Body).Decode(&sess)
 	resp.Body.Close()
 

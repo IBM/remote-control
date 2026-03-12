@@ -24,15 +24,12 @@ func TestNewStoreUnknownType(t *testing.T) {
 func TestMemoryStoreCreate(t *testing.T) {
 	store, _ := NewStore("memory", StoreOptions{})
 
-	sess, err := store.Create([]string{"bash", "-c", "echo hello"})
+	sess, err := store.Create(nil)
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 	if sess.ID == "" {
 		t.Error("expected non-empty session ID")
-	}
-	if len(sess.Command) < 1 || sess.Command[0] != "bash" {
-		t.Errorf("expected bash command, got %v", sess.Command)
 	}
 	if sess.Status != StatusActive {
 		t.Errorf("expected active status, got %s", sess.Status)
@@ -42,7 +39,7 @@ func TestMemoryStoreCreate(t *testing.T) {
 func TestMemoryStoreGet(t *testing.T) {
 	store, _ := NewStore("memory", StoreOptions{})
 
-	created, _ := store.Create([]string{"bash"})
+	created, _ := store.Create(nil)
 	got, err := store.Get(created.ID)
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
@@ -76,8 +73,8 @@ func TestMemoryStoreListEmpty(t *testing.T) {
 func TestMemoryStoreList(t *testing.T) {
 	store, _ := NewStore("memory", StoreOptions{})
 
-	store.Create([]string{"bash"})  //nolint:errcheck
-	store.Create([]string{"sh"})    //nolint:errcheck
+	store.Create(nil) //nolint:errcheck
+	store.Create(nil) //nolint:errcheck
 
 	sessions, err := store.List()
 	if err != nil {
@@ -91,7 +88,7 @@ func TestMemoryStoreList(t *testing.T) {
 func TestMemoryStoreDelete(t *testing.T) {
 	store, _ := NewStore("memory", StoreOptions{})
 
-	sess, _ := store.Create([]string{"bash"})
+	sess, _ := store.Create(nil)
 	if err := store.Delete(sess.ID); err != nil {
 		t.Fatalf("Delete error: %v", err)
 	}
@@ -114,8 +111,8 @@ func TestMemoryStoreDeleteNotFound(t *testing.T) {
 func TestMemoryStoreCreateUniqueIDs(t *testing.T) {
 	store, _ := NewStore("memory", StoreOptions{})
 
-	sess1, _ := store.Create([]string{"bash"})
-	sess2, _ := store.Create([]string{"sh"})
+	sess1, _ := store.Create(nil)
+	sess2, _ := store.Create(nil)
 
 	if sess1.ID == sess2.ID {
 		t.Error("expected unique IDs for different sessions")

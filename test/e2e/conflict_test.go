@@ -12,9 +12,11 @@ func TestStdinConflictResolution(t *testing.T) {
 	serverURL := testServer(t)
 
 	// Create a session.
-	createBody, _ := json.Marshal(map[string]any{"command": []string{"bash"}})
+	createBody, _ := json.Marshal(map[string]any{})
 	resp, _ := http.Post(serverURL+"/sessions", "application/json", bytes.NewReader(createBody))
-	var session struct{ ID string `json:"id"` }
+	var session struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(resp.Body).Decode(&session)
 	resp.Body.Close()
 
@@ -62,9 +64,11 @@ func TestStdinConflictResolution(t *testing.T) {
 func TestStdinAccept(t *testing.T) {
 	serverURL := testServer(t)
 
-	createBody, _ := json.Marshal(map[string]any{"command": []string{"bash"}})
+	createBody, _ := json.Marshal(map[string]any{})
 	resp, _ := http.Post(serverURL+"/sessions", "application/json", bytes.NewReader(createBody))
-	var session struct{ ID string `json:"id"` }
+	var session struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(resp.Body).Decode(&session)
 	resp.Body.Close()
 
@@ -73,13 +77,17 @@ func TestStdinAccept(t *testing.T) {
 		"data": base64.StdEncoding.EncodeToString([]byte("pwd\n")),
 	})
 	stdinResp, _ := http.Post(serverURL+"/sessions/"+session.ID+"/stdin?client_id=client", "application/json", bytes.NewReader(stdinBody))
-	var stdinEntry struct{ ID string `json:"id"` }
+	var stdinEntry struct {
+		ID string `json:"id"`
+	}
 	json.NewDecoder(stdinResp.Body).Decode(&stdinEntry)
 	stdinResp.Body.Close()
 
 	// Verify status before accepting
 	statusResp, _ := http.Get(serverURL + "/sessions/" + session.ID + "/stdin/" + stdinEntry.ID + "/status")
-	var beforeResult struct{ Status string `json:"status"` }
+	var beforeResult struct {
+		Status string `json:"status"`
+	}
 	json.NewDecoder(statusResp.Body).Decode(&beforeResult)
 	statusResp.Body.Close()
 	if beforeResult.Status != "pending" {

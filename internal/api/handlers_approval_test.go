@@ -53,7 +53,7 @@ func TestRegisterClientAutoApproved(t *testing.T) {
 	// RequireApproval=false (default test server): clients are auto-approved.
 	_, ts := newTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 
@@ -77,7 +77,7 @@ func TestRegisterClientPending(t *testing.T) {
 	// RequireApproval=true: clients start pending.
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 
@@ -109,7 +109,7 @@ func TestRegisterClientSessionNotFound(t *testing.T) {
 func TestListAllClients(t *testing.T) {
 	_, ts := newTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -132,7 +132,7 @@ func TestListAllClients(t *testing.T) {
 func TestListPendingClientsFilter(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -142,7 +142,7 @@ func TestListPendingClientsFilter(t *testing.T) {
 	var client1 map[string]string
 	decodeJSON(t, reg1, &client1)
 	clientID1 := client1["client_id"]
-	
+
 	postJSON(t, ts, "/sessions/"+sid+"/clients", nil).Body.Close()
 
 	// Approve one using the generated ID.
@@ -175,7 +175,7 @@ func TestListClientsSessionNotFound(t *testing.T) {
 func TestApproveClient(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -212,7 +212,7 @@ func TestApproveClient(t *testing.T) {
 func TestApproveClientDefaultPermission(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -233,7 +233,7 @@ func TestApproveClientDefaultPermission(t *testing.T) {
 func TestApproveClientNotFound(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -262,7 +262,7 @@ func TestApproveClientSessionNotFound(t *testing.T) {
 func TestDenyClient(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -298,7 +298,7 @@ func TestDenyClient(t *testing.T) {
 func TestDenyClientNotFound(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -328,7 +328,7 @@ func TestPollOutputForbiddenWhenNotApproved(t *testing.T) {
 	// With RequireApproval=true, polling without being approved gets 403.
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -355,7 +355,7 @@ func TestPollOutputForbiddenWhenNotApproved(t *testing.T) {
 func TestPollOutputAllowedWhenApproved(t *testing.T) {
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -365,7 +365,7 @@ func TestPollOutputAllowedWhenApproved(t *testing.T) {
 	var regResult map[string]string
 	decodeJSON(t, regResp, &regResult)
 	clientID := regResult["client_id"]
-	
+
 	postJSON(t, ts, "/sessions/"+sid+"/clients/"+clientID+"/approve",
 		map[string]string{"permission": "read-write"}).Body.Close()
 
@@ -386,7 +386,7 @@ func TestEnqueueStdinForbiddenWhenReadOnly(t *testing.T) {
 	// Read-only clients cannot enqueue stdin.
 	_, ts := newApprovalTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -396,7 +396,7 @@ func TestEnqueueStdinForbiddenWhenReadOnly(t *testing.T) {
 	var regResult map[string]string
 	decodeJSON(t, regResp, &regResult)
 	clientID := regResult["client_id"]
-	
+
 	postJSON(t, ts, "/sessions/"+sid+"/clients/"+clientID+"/approve",
 		map[string]string{"permission": "read-only"}).Body.Close()
 

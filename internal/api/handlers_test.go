@@ -53,7 +53,7 @@ func decodeJSON(t *testing.T, resp *http.Response, v any) {
 func TestCreateAndGetSession(t *testing.T) {
 	_, ts := newTestServer(t)
 
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
@@ -80,8 +80,8 @@ func TestCreateAndGetSession(t *testing.T) {
 
 func TestListSessions(t *testing.T) {
 	_, ts := newTestServer(t)
-	postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
-	postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"sh"}})
+	postJSON(t, ts, "/sessions", CreateSessionRequest{})
+	postJSON(t, ts, "/sessions", CreateSessionRequest{})
 
 	resp := getJSON(t, ts, "/sessions")
 	if resp.StatusCode != http.StatusOK {
@@ -96,7 +96,7 @@ func TestListSessions(t *testing.T) {
 
 func TestDeleteSession(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 
@@ -115,7 +115,7 @@ func TestDeleteSession(t *testing.T) {
 
 func TestPatchSession(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 
@@ -139,7 +139,7 @@ func TestPatchSession(t *testing.T) {
 
 func TestAppendAndPollOutput(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
@@ -224,7 +224,7 @@ func TestAppendAndPollOutput(t *testing.T) {
 
 func TestStdinEnqueueAndPeek(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{"bash"}})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	sid := created.ID
