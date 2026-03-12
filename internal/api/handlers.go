@@ -144,9 +144,18 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	handlerCh.Log(alog.DEBUG2, "Appending output for session %s", id)
 	sess, err := s.store.Get(id)
+
+	// If session is unknown, create it. This allows a session to revive after
+	// server restart
+	respSuccess := http.StatusNoContent
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		handlerCh.Log(alog.DEBUG, "Recreating unknown session %s", id)
+		sess, err = s.store.Create(&id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Unable to recreate session"})
+			return
+		}
+		respSuccess = http.StatusCreated
 	}
 
 	var req AppendOutputRequest
@@ -199,7 +208,7 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(respSuccess)
 }
 
 func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {

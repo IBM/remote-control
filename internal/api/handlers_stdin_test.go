@@ -245,8 +245,8 @@ func TestAppendOutputSessionNotFound(t *testing.T) {
 		Data:      data,
 		Timestamp: "2024-01-01T00:00:00Z",
 	})
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }
