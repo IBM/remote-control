@@ -7,7 +7,7 @@ import (
 )
 
 func TestAppendAndReadOutput(t *testing.T) {
-	s := newSession("test-1", []string{"bash"})
+	s := newSession("test-1")
 
 	t1 := time.Now()
 	s.AppendOutput(StreamStdout, []byte("hello"), t1)
@@ -42,7 +42,7 @@ func TestAppendAndReadOutput(t *testing.T) {
 }
 
 func TestReadOutputFromOffset(t *testing.T) {
-	s := newSession("test-2", []string{"bash"})
+	s := newSession("test-2")
 	now := time.Now()
 	s.AppendOutput(StreamStdout, []byte("hello"), now)
 	s.AppendOutput(StreamStdout, []byte(" world"), now.Add(time.Millisecond))
@@ -64,7 +64,7 @@ func TestReadOutputFromOffset(t *testing.T) {
 }
 
 func TestConcurrentAppendOutput(t *testing.T) {
-	s := newSession("test-3", []string{"bash"})
+	s := newSession("test-3")
 	var wg sync.WaitGroup
 	writes := 100
 
@@ -96,7 +96,7 @@ func TestConcurrentAppendOutput(t *testing.T) {
 }
 
 func TestStdinFIFO(t *testing.T) {
-	s := newSession("test-4", []string{"bash"})
+	s := newSession("test-4")
 	now := time.Now()
 
 	s.EnqueueStdin(StdinEntry{ID: "1", Source: "client-a", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
@@ -117,7 +117,7 @@ func TestStdinFIFO(t *testing.T) {
 }
 
 func TestComplete(t *testing.T) {
-	s := newSession("test-5", []string{"bash"})
+	s := newSession("test-5")
 	if s.GetStatus() != StatusActive {
 		t.Errorf("expected active status initially")
 	}
@@ -134,7 +134,7 @@ func TestComplete(t *testing.T) {
 }
 
 func TestStdinAcceptReject(t *testing.T) {
-	s := newSession("test-6", []string{"bash"})
+	s := newSession("test-6")
 	now := time.Now()
 	s.EnqueueStdin(StdinEntry{ID: "a", Source: "client", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
 	s.EnqueueStdin(StdinEntry{ID: "b", Source: "client", Data: []byte("pwd\n"), Status: StdinPending, Timestamp: now.Add(time.Millisecond)})
@@ -172,7 +172,7 @@ func TestStdinAcceptReject(t *testing.T) {
 }
 
 func TestRejectStdin(t *testing.T) {
-	s := newSession("test-rs", []string{"bash"})
+	s := newSession("test-rs")
 	now := time.Now()
 	s.EnqueueStdin(StdinEntry{ID: "x", Source: "client", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
 
@@ -186,7 +186,7 @@ func TestRejectStdin(t *testing.T) {
 }
 
 func TestRejectStdinNotFound(t *testing.T) {
-	s := newSession("test-rsn", []string{"bash"})
+	s := newSession("test-rsn")
 
 	err := s.RejectStdin("nonexistent")
 	if err == nil {
@@ -209,7 +209,7 @@ func TestNotFoundErrorMessage(t *testing.T) {
 }
 
 func TestStreamOffsets(t *testing.T) {
-	s := newSession("test-7", []string{"bash"})
+	s := newSession("test-7")
 	now := time.Now()
 	s.AppendOutput(StreamStdout, []byte("abc"), now)
 	s.AppendOutput(StreamStdout, []byte("de"), now.Add(time.Millisecond))

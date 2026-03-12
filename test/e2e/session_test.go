@@ -14,7 +14,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	serverURL := testServer(t)
 
 	// 1. Create a session.
-	createBody, _ := json.Marshal(map[string]any{"command": []string{"bash"}})
+	createBody, _ := json.Marshal(map[string]any{})
 	resp, err := http.Post(serverURL+"/sessions", "application/json", bytes.NewReader(createBody))
 	if err != nil {
 		t.Fatalf("create session: %v", err)

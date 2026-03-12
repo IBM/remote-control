@@ -13,8 +13,8 @@ type StoreOptions struct{}
 
 // Store is the interface for session persistence.
 type Store interface {
-	// Create creates a new session running the given command.
-	Create(command []string) (*Session, error)
+	// Create creates a new session with the input ID. ID is created if nil.
+	Create(id *string) (*Session, error)
 	// Get returns the session with the given ID.
 	Get(id string) (*Session, error)
 	// List returns all sessions.
@@ -43,12 +43,15 @@ type MemoryStore struct {
 }
 
 // Create creates a new session and stores it in memory.
-func (m *MemoryStore) Create(command []string) (*Session, error) {
-	id := uuid.New().String()
-	sess := newSession(id, command)
+func (m *MemoryStore) Create(id *string) (*Session, error) {
+	if nil == id {
+		newId := uuid.New().String()
+		id = &newId
+	}
+	sess := newSession(*id)
 
 	m.mu.Lock()
-	m.sessions[id] = sess
+	m.sessions[*id] = sess
 	m.mu.Unlock()
 
 	return sess, nil

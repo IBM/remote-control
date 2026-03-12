@@ -7,9 +7,8 @@ import (
 
 // Session holds all state for a single remote-control session.
 type Session struct {
-	ID      string   `json:"id"`
-	Command []string `json:"command"`
-	Status  Status   `json:"status"`
+	ID     string `json:"id"`
+	Status Status `json:"status"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -32,10 +31,9 @@ type Session struct {
 	clients map[string]*ClientRecord
 }
 
-func newSession(id string, command []string) *Session {
+func newSession(id string) *Session {
 	return &Session{
 		ID:        id,
-		Command:   command,
 		Status:    StatusActive,
 		CreatedAt: time.Now(),
 		clients:   make(map[string]*ClientRecord),

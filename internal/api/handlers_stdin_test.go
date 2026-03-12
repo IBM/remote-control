@@ -10,12 +10,9 @@ import (
 )
 
 // makeSession creates a session in ts and returns its ID.
-func makeSession(t *testing.T, ts *httptest.Server, cmd ...string) string {
+func makeSession(t *testing.T, ts *httptest.Server) string {
 	t.Helper()
-	if len(cmd) == 0 {
-		cmd = []string{"bash"}
-	}
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: cmd})
+	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
 	var created SessionResponse
 	decodeJSON(t, resp, &created)
 	return created.ID
@@ -192,7 +189,7 @@ func TestCreateSessionBadRequest(t *testing.T) {
 	_, ts := newTestServer(t)
 
 	// Empty command slice should be rejected.
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{Command: []string{}})
+	resp := postJSON(t, ts, "/sessions", AppendOutputRequest{Stream: "oops!"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
@@ -248,8 +245,8 @@ func TestAppendOutputSessionNotFound(t *testing.T) {
 		Data:      data,
 		Timestamp: "2024-01-01T00:00:00Z",
 	})
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

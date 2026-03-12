@@ -6,7 +6,7 @@ import (
 )
 
 func TestRegisterClient(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	rec := s.RegisterClient("client-1", "Alice")
 
 	if rec.ClientID != "client-1" {
@@ -24,7 +24,7 @@ func TestRegisterClient(t *testing.T) {
 }
 
 func TestRegisterClientStoredInSession(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Alice")
 
 	got, err := s.GetClient("client-1")
@@ -37,7 +37,7 @@ func TestRegisterClientStoredInSession(t *testing.T) {
 }
 
 func TestApproveClientReadWrite(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Alice")
 
 	if err := s.ApproveClient("client-1", PermissionReadWrite); err != nil {
@@ -56,7 +56,7 @@ func TestApproveClientReadWrite(t *testing.T) {
 }
 
 func TestApproveClientReadOnly(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Bob")
 
 	if err := s.ApproveClient("client-1", PermissionReadOnly); err != nil {
@@ -69,7 +69,7 @@ func TestApproveClientReadOnly(t *testing.T) {
 }
 
 func TestApproveClientNotFound(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 
 	err := s.ApproveClient("nonexistent", PermissionReadWrite)
 	if err == nil {
@@ -81,7 +81,7 @@ func TestApproveClientNotFound(t *testing.T) {
 }
 
 func TestDenyClient(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Eve")
 
 	if err := s.DenyClient("client-1"); err != nil {
@@ -97,7 +97,7 @@ func TestDenyClient(t *testing.T) {
 }
 
 func TestDenyClientNotFound(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 
 	err := s.DenyClient("nonexistent")
 	if err == nil {
@@ -109,7 +109,7 @@ func TestDenyClientNotFound(t *testing.T) {
 }
 
 func TestGetClientNotFound(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 
 	_, err := s.GetClient("nonexistent")
 	if err == nil {
@@ -121,7 +121,7 @@ func TestGetClientNotFound(t *testing.T) {
 }
 
 func TestListPendingClients(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Alice")
 	s.RegisterClient("client-2", "Bob")
 	s.RegisterClient("client-3", "Carol")
@@ -139,7 +139,7 @@ func TestListPendingClients(t *testing.T) {
 }
 
 func TestListPendingClientsEmpty(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 
 	pending := s.ListPendingClients()
 	if len(pending) != 0 {
@@ -148,7 +148,7 @@ func TestListPendingClientsEmpty(t *testing.T) {
 }
 
 func TestListClients(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Alice")
 	s.RegisterClient("client-2", "Bob")
 
@@ -159,7 +159,7 @@ func TestListClients(t *testing.T) {
 }
 
 func TestListClientsEmpty(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 
 	clients := s.ListClients()
 	if len(clients) != 0 {
@@ -168,7 +168,7 @@ func TestListClientsEmpty(t *testing.T) {
 }
 
 func TestGetClientReturnsCopy(t *testing.T) {
-	s := newSession("test", []string{"bash"})
+	s := newSession("test")
 	s.RegisterClient("client-1", "Alice")
 
 	rec, _ := s.GetClient("client-1")
@@ -182,7 +182,7 @@ func TestGetClientReturnsCopy(t *testing.T) {
 }
 
 func TestIsNotFound(t *testing.T) {
-	s := newSession("x", []string{"bash"})
+	s := newSession("x")
 
 	// Errors from session methods use notFoundError.
 	err := s.ApproveClient("missing", PermissionReadWrite)

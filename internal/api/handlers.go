@@ -24,7 +24,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // readJSON decodes JSON from r.Body into v.
 func readJSON(r *http.Request, v any) error {
-	return json.NewDecoder(r.Body).Decode(v)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
 }
 
 // handlers wires all HTTP routes onto mux.
@@ -64,11 +66,15 @@ func (s *Server) registerRoutes() {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
-	if err := readJSON(r, &req); err != nil || len(req.Command) == 0 {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "command is required"})
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
 		return
 	}
-	sess, err := s.store.Create(req.Command)
+	var inputId *string = nil
+	if req.ID != "" {
+		inputId = &req.ID
+	}
+	sess, err := s.store.Create(inputId)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
@@ -138,9 +144,18 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	handlerCh.Log(alog.DEBUG2, "Appending output for session %s", id)
 	sess, err := s.store.Get(id)
+
+	// If session is unknown, create it. This allows a session to revive after
+	// server restart
+	respSuccess := http.StatusNoContent
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		handlerCh.Log(alog.DEBUG, "Recreating unknown session %s", id)
+		sess, err = s.store.Create(&id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Unable to recreate session"})
+			return
+		}
+		respSuccess = http.StatusCreated
 	}
 
 	var req AppendOutputRequest
@@ -193,7 +208,7 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(respSuccess)
 }
 
 func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
