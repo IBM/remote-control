@@ -162,72 +162,13 @@ func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *A
 	}
 
 	// Submit to server queue for client visibility (prefer WebSocket, fallback to HTTP)
-	var entryID string
-	var err error
-
-	if wsHost != nil && wsHost.IsConnected() {
-		// Use WebSocket - send via WebSocket and don't wait for confirmation
-		// WebSocket broadcast will handle delivery
-		epochID := time.Now().UnixNano()
-		entryID = fmt.Sprintf("host-%d", epochID)
-
-		// Create entry via HTTP then broadcast via WebSocket
-		entryID, err = client.SubmitHostStdin(sessionID, data)
-		if err != nil {
-			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
-			return nil
-		}
-	} else {
-		// Use HTTP polling
-		entryID, err = client.SubmitHostStdin(sessionID, data)
-		if err != nil {
-			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
-			return nil
-		}
+	// var entryID string
+	if _, err := client.SubmitHostStdin(sessionID, data); nil != err {
+		ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+		return nil
 	}
 
-	// Poll for acceptance status with timeout
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-
-	maxWait := 200 * time.Millisecond
-	start := time.Now()
-
-	for {
-		elapsed := time.Since(start)
-		if elapsed > maxWait {
-			ch.Log(alog.DEBUG, "[remote-control] host stdin queue timeout")
-			return nil // Already written directly in PTY mode
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			status := client.GetHostStdinStatus(sessionID, entryID)
-			switch status {
-			case "accepted", "rejected", "consumed":
-				return nil
-			default:
-				// Still pending, continue polling
-			}
-		}
-	}
-}
-
-// writeBatch writes bytes to either stdin pipe or PTY.
-func writeBatch(data []byte, stdinPipe *syncWriter, ptmx *os.File, ptmxMu *sync.Mutex) error {
-	if stdinPipe != nil {
-		_, err := stdinPipe.Write(data)
-		return err
-	}
-	// PTY mode
-	if ptmxMu != nil {
-		ptmxMu.Lock()
-		defer ptmxMu.Unlock()
-	}
-	_, err := ptmx.Write(data)
-	return err
+	return nil
 }
 
 // proxyLocalStdin reads lines from os.Stdin, submits each line to the server
