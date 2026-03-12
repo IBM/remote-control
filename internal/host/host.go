@@ -443,7 +443,7 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMod
 				continue
 			}
 			for _, client := range clients {
-				h.handleClientApproval(ctx, sessionID, client.ClientID, client.CommonName, rawMode)
+				h.handleClientApproval(ctx, sessionID, client.ClientID, rawMode)
 			}
 		}
 	}
@@ -458,7 +458,7 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMod
 //
 // The approval channel is armed before writing the prompt to eliminate the race
 // window between displaying the prompt and starting to capture the response byte.
-func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, commonName string, rawMode bool) {
+func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID string, rawMode bool) {
 	// 1. Arm the approval channel BEFORE writing the prompt.
 	respCh := h.armApprovalChannel()
 	defer h.disarmApprovalChannel()
@@ -475,7 +475,7 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 	}
 
 	// 3. Write the approval prompt.
-	h.writeSideChannel(rawMode, "\n[remote-control] Client %q (%s) wants to join.\n", commonName, clientID)
+	h.writeSideChannel(rawMode, "\n[remote-control] Client (%s) wants to join.\n", clientID)
 	h.writeSideChannel(rawMode, "  [a] approve read-write  [r] read-only  [d] deny: ")
 
 	// 4. Wait for the operator's response byte.
@@ -502,21 +502,21 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 			if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", clientID)
 				done = true
 			}
 		case 'r', 'R':
 			if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", clientID)
 				done = true
 			}
 		case 'd', 'D':
 			if err := h.client.DenyClient(sessionID, clientID); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] deny client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", clientID)
 				done = true
 			}
 		default:

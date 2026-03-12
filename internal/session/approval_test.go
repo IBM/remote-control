@@ -7,13 +7,10 @@ import (
 
 func TestRegisterClient(t *testing.T) {
 	s := newSession("test")
-	rec := s.RegisterClient("client-1", "Alice")
+	rec := s.RegisterClient("client-1")
 
 	if rec.ClientID != "client-1" {
 		t.Errorf("expected client-1, got %s", rec.ClientID)
-	}
-	if rec.CommonName != "Alice" {
-		t.Errorf("expected Alice, got %s", rec.CommonName)
 	}
 	if rec.Approval != ApprovalPending {
 		t.Errorf("expected pending approval, got %s", rec.Approval)
@@ -25,7 +22,7 @@ func TestRegisterClient(t *testing.T) {
 
 func TestRegisterClientStoredInSession(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Alice")
+	s.RegisterClient("client-1")
 
 	got, err := s.GetClient("client-1")
 	if err != nil {
@@ -38,7 +35,7 @@ func TestRegisterClientStoredInSession(t *testing.T) {
 
 func TestApproveClientReadWrite(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Alice")
+	s.RegisterClient("client-1")
 
 	if err := s.ApproveClient("client-1", PermissionReadWrite); err != nil {
 		t.Fatalf("ApproveClient error: %v", err)
@@ -57,7 +54,7 @@ func TestApproveClientReadWrite(t *testing.T) {
 
 func TestApproveClientReadOnly(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Bob")
+	s.RegisterClient("client-1")
 
 	if err := s.ApproveClient("client-1", PermissionReadOnly); err != nil {
 		t.Fatalf("ApproveClient error: %v", err)
@@ -82,7 +79,7 @@ func TestApproveClientNotFound(t *testing.T) {
 
 func TestDenyClient(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Eve")
+	s.RegisterClient("client-1")
 
 	if err := s.DenyClient("client-1"); err != nil {
 		t.Fatalf("DenyClient error: %v", err)
@@ -122,9 +119,9 @@ func TestGetClientNotFound(t *testing.T) {
 
 func TestListPendingClients(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Alice")
-	s.RegisterClient("client-2", "Bob")
-	s.RegisterClient("client-3", "Carol")
+	s.RegisterClient("client-1")
+	s.RegisterClient("client-2")
+	s.RegisterClient("client-3")
 
 	s.ApproveClient("client-1", PermissionReadWrite) //nolint:errcheck
 	s.DenyClient("client-2")                         //nolint:errcheck
@@ -149,8 +146,8 @@ func TestListPendingClientsEmpty(t *testing.T) {
 
 func TestListClients(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Alice")
-	s.RegisterClient("client-2", "Bob")
+	s.RegisterClient("client-1")
+	s.RegisterClient("client-2")
 
 	clients := s.ListClients()
 	if len(clients) != 2 {
@@ -169,7 +166,7 @@ func TestListClientsEmpty(t *testing.T) {
 
 func TestGetClientReturnsCopy(t *testing.T) {
 	s := newSession("test")
-	s.RegisterClient("client-1", "Alice")
+	s.RegisterClient("client-1")
 
 	rec, _ := s.GetClient("client-1")
 	rec.Approval = ApprovalApproved // mutate the returned copy

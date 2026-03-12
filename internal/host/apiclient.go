@@ -208,8 +208,7 @@ func (c *APIClient) ListPendingClients(sessionID string) ([]PendingClient, error
 
 // PendingClient describes a client waiting for host approval.
 type PendingClient struct {
-	ClientID   string `json:"client_id"`
-	CommonName string `json:"common_name"`
+	ClientID string `json:"client_id"`
 }
 
 // ApproveClient approves a client with the given permission.

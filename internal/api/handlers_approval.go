@@ -17,21 +17,9 @@ func (s *Server) handleRegisterClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read optional common name from request body
-	var body struct {
-		CommonName string `json:"common_name"`
-	}
-	_ = readJSON(r, &body)
-
-	// Extract common name from TLS cert if not provided
-	commonName := body.CommonName
-	if commonName == "" {
-		_, commonName = s.clientIdentity(r)
-	}
-
 	// Server generates the client ID
 	clientID := uuid.New().String()
-	rec := sess.RegisterClient(clientID, commonName)
+	rec := sess.RegisterClient(clientID)
 
 	// If approval is not required, auto-approve with default permission.
 	if !s.cfg.RequireApproval {

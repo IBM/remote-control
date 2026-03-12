@@ -22,7 +22,6 @@ const (
 // ClientRecord holds metadata about a connected remote client.
 type ClientRecord struct {
 	ClientID     string         `json:"client_id"`
-	CommonName   string         `json:"common_name"` // from TLS peer cert CN
 	JoinedAt     time.Time      `json:"joined_at"`
 	Approval     ApprovalStatus `json:"approval"`
 	Permission   Permission     `json:"permission"`
@@ -32,13 +31,12 @@ type ClientRecord struct {
 }
 
 // RegisterClient adds a new client record to the session in pending state.
-func (s *Session) RegisterClient(clientID, commonName string) *ClientRecord {
+func (s *Session) RegisterClient(clientID string) *ClientRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	record := &ClientRecord{
 		ClientID:     clientID,
-		CommonName:   commonName,
 		JoinedAt:     now,
 		Approval:     ApprovalPending,
 		LastPollAt:   now,
