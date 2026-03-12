@@ -398,6 +398,8 @@ func (c *Client) pickSession(_ context.Context) (string, error) {
 	}
 	if len(sessions) == 0 {
 		return "", fmt.Errorf("no sessions available")
+	} else if len(sessions) == 1 {
+		return sessions[0].ID, nil
 	}
 	fmt.Fprintln(os.Stderr, "Available sessions:")
 	for i, s := range sessions {
