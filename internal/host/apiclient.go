@@ -66,7 +66,7 @@ func drainClose(resp *http.Response) {
 
 // CreateSession creates a new session on the server and returns its ID.
 func (c *APIClient) CreateSession(command []string) (string, error) {
-	resp, err := c.post("/sessions", map[string]any{"command": command})
+	resp, err := c.post("/sessions", map[string]any{})
 	if err != nil {
 		return "", err
 	}

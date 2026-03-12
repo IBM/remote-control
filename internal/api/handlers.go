@@ -66,11 +66,15 @@ func (s *Server) registerRoutes() {
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
-	if err := readJSON(r, &req); err != nil || len(req.Command) == 0 {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "command is required"})
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
 		return
 	}
-	sess, err := s.store.Create(req.Command)
+	var inputId *string = nil
+	if req.ID != "" {
+		inputId = &req.ID
+	}
+	sess, err := s.store.Create(inputId)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
