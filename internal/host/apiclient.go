@@ -162,16 +162,6 @@ func (c *APIClient) RejectStdin(sessionID, entryID string) error {
 	return nil
 }
 
-// RejectAllPending bulk-rejects all pending stdin entries.
-func (c *APIClient) RejectAllPending(sessionID string) error {
-	resp, err := c.post("/sessions/"+sessionID+"/stdin/reject-all", nil)
-	if err != nil {
-		return err
-	}
-	drainClose(resp)
-	return nil
-}
-
 // CompleteSession marks the session as completed with the given exit code.
 func (c *APIClient) CompleteSession(sessionID string, exitCode int) error {
 	resp, err := c.patch("/sessions/"+sessionID, map[string]int{"exit_code": exitCode})

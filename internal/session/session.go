@@ -205,20 +205,6 @@ func (s *Session) RejectStdin(id string) error {
 	return errNotFound(id)
 }
 
-// RejectAllPending rejects all currently pending stdin entries and returns their IDs.
-func (s *Session) RejectAllPending() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var ids []string
-	for _, e := range s.stdin {
-		if e.Status == StdinPending {
-			e.Status = StdinRejected
-			ids = append(ids, e.ID)
-		}
-	}
-	return ids
-}
-
 // GetStdinStatus returns the status of the stdin entry with the given ID.
 func (s *Session) GetStdinStatus(id string) (StdinStatus, error) {
 	s.mu.RLock()

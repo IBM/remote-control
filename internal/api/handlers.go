@@ -76,7 +76,6 @@ func (s *Server) registerRoutes() {
 	mux.HandleFunc("GET /sessions/{id}/stdin", s.handlePeekStdin)
 	mux.HandleFunc("POST /sessions/{id}/stdin/{sid}/accept", s.handleAcceptStdin)
 	mux.HandleFunc("POST /sessions/{id}/stdin/{sid}/reject", s.handleRejectStdin)
-	mux.HandleFunc("POST /sessions/{id}/stdin/reject-all", s.handleRejectAllStdin)
 	mux.HandleFunc("GET /sessions/{id}/stdin/{sid}/status", s.handleStdinStatus)
 
 	// Approval (Phase 7)
@@ -447,17 +446,6 @@ func (s *Server) handleRejectStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleRejectAllStdin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	sess, err := s.store.Get(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	ids := sess.RejectAllPending()
-	writeJSON(w, http.StatusOK, map[string][]string{"rejected_ids": ids})
 }
 
 func (s *Server) handleStdinStatus(w http.ResponseWriter, r *http.Request) {
