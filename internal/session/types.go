@@ -10,15 +10,6 @@ const (
 	StreamStderr Stream = "stderr"
 )
 
-// StdinStatus tracks whether a pending stdin entry has been accepted or rejected.
-type StdinStatus string
-
-const (
-	StdinPending  StdinStatus = "pending"
-	StdinAccepted StdinStatus = "accepted"
-	StdinRejected StdinStatus = "rejected"
-)
-
 // Status is the lifecycle state of a session.
 type Status string
 
@@ -40,10 +31,7 @@ type OutputChunk struct {
 
 // StdinEntry is a single unit of stdin data submitted by a client or the host.
 type StdinEntry struct {
-	ID     string `json:"id"`
+	ID     uint64 `json:"id"`
 	Source string `json:"source"` // "host" or a client ID
-
-	Data      []byte      `json:"data"`
-	Timestamp time.Time   `json:"timestamp"` // host-grounded: set when host accepts the entry
-	Status    StdinStatus `json:"status"`
+	Data   []byte `json:"data"`
 }

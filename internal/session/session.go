@@ -1,9 +1,14 @@
 package session
 
 import (
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/IBM/alchemy-logging/src/go/alog"
 )
+
+var sessCh = alog.UseChannel("SESSION")
 
 // Session holds all state for a single remote-control session.
 type Session struct {
@@ -25,7 +30,8 @@ type Session struct {
 	stderrOffset int64
 
 	// stdin is the ordered queue of all stdin entries (including history).
-	stdin []*StdinEntry
+	stdin       []*StdinEntry
+	stdinNextId uint64
 
 	// Approval state (populated in Phase 7).
 	clients map[string]*ClientRecord
@@ -33,10 +39,11 @@ type Session struct {
 
 func newSession(id string) *Session {
 	return &Session{
-		ID:        id,
-		Status:    StatusActive,
-		CreatedAt: time.Now(),
-		clients:   make(map[string]*ClientRecord),
+		ID:          id,
+		Status:      StatusActive,
+		CreatedAt:   time.Now(),
+		clients:     make(map[string]*ClientRecord),
+		stdinNextId: 1,
 	}
 }
 
@@ -144,23 +151,16 @@ func (s *Session) StreamOffset(stream Stream) int64 {
 }
 
 // EnqueueStdin appends a new stdin entry to the session's STDIN queue.
-func (s *Session) EnqueueStdin(entry StdinEntry) {
+func (s *Session) EnqueueStdin(source string, data []byte) StdinEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp := entry
-	s.stdin = append(s.stdin, &cp)
-}
-
-// DequeueStdin removes and returns the first stdin entry from the queue.
-// Returns nil if the queue is empty.
-func (s *Session) DequeueStdin() *StdinEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.stdin) == 0 {
-		return nil
+	entry := StdinEntry{
+		ID:     s.stdinNextId,
+		Source: source,
+		Data:   data,
 	}
-	entry := s.stdin[0]
-	s.stdin = s.stdin[1:]
+	s.stdinNextId++
+	s.stdin = append(s.stdin, &entry)
 	return entry
 }
 
@@ -169,52 +169,29 @@ func (s *Session) DequeueStdin() *StdinEntry {
 func (s *Session) PeekStdin() *StdinEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, e := range s.stdin {
-		if e.Status == StdinPending {
-			cp := *e
-			return &cp
-		}
+	sessCh.Log(alog.DEBUG2, "Peeking stdin (%d entries)", len(s.stdin))
+	if len(s.stdin) == 0 {
+		return nil
 	}
-	return nil
+	cp := *s.stdin[0]
+	return &cp
 }
 
-// AcceptStdin marks the given entry as accepted and sets a host-grounded timestamp.
-func (s *Session) AcceptStdin(id string, ts time.Time) error {
+// AckStdin removes the identified entry from stdin.
+func (s *Session) AckStdin(id uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, e := range s.stdin {
+	sessCh.Log(alog.DEBUG2, "Ack'ing stdin %d (%d entries)", id, len(s.stdin))
+	for idx, e := range s.stdin {
+		sessCh.Log(alog.DEBUG4, "Checking entry with id %d", e.ID)
 		if e.ID == id {
-			e.Status = StdinAccepted
-			e.Timestamp = ts
+			copy(s.stdin[idx:], s.stdin[idx+1:])
+			s.stdin = s.stdin[:len(s.stdin)-1]
+			sessCh.Log(alog.DEBUG3, "Removed entry %d. Remaining entries: %d", e.ID, len(s.stdin))
 			return nil
 		}
 	}
-	return errNotFound(id)
-}
-
-// RejectStdin marks the given entry as rejected.
-func (s *Session) RejectStdin(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, e := range s.stdin {
-		if e.ID == id {
-			e.Status = StdinRejected
-			return nil
-		}
-	}
-	return errNotFound(id)
-}
-
-// GetStdinStatus returns the status of the stdin entry with the given ID.
-func (s *Session) GetStdinStatus(id string) (StdinStatus, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, e := range s.stdin {
-		if e.ID == id {
-			return e.Status, nil
-		}
-	}
-	return "", errNotFound(id)
+	return errNotFound(strconv.FormatUint(id, 10))
 }
 
 // Complete marks the session as completed with the given exit code.
@@ -346,25 +323,4 @@ func (s *Session) PurgeConsumedOutput(maxInitialBufferBytes int64) (purgedStdout
 	s.stderrChunks = newStderrChunks
 
 	return purgedStdout, purgedStderr
-}
-
-// PurgeConsumedStdin removes StdinEntries that have been accepted by the host.
-// Returns the number of entries purged.
-func (s *Session) PurgeConsumedStdin() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	newStdin := make([]*StdinEntry, 0, len(s.stdin))
-	purged := 0
-
-	for _, entry := range s.stdin {
-		if entry.Status == StdinAccepted {
-			purged++
-		} else {
-			newStdin = append(newStdin, entry)
-		}
-	}
-
-	s.stdin = newStdin
-	return purged
 }
