@@ -53,7 +53,7 @@ type SessionInfo struct {
 // OutputChunk is a single chunk of output from the server.
 type OutputChunk struct {
 	Stream    string `json:"stream"`
-	Data      string `json:"data"`      // base64
+	Data      string `json:"data"` // base64
 	Offset    int64  `json:"offset"`
 	Timestamp string `json:"timestamp"` // RFC3339Nano
 }
@@ -149,19 +149,6 @@ func (c *APIClient) EnqueueStdin(sessionID, clientID string, data []byte) (strin
 		ID string `json:"id"`
 	}
 	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
-}
-
-// GetStdinStatus returns the status of a submitted stdin entry.
-func (c *APIClient) GetStdinStatus(sessionID, entryID string) (string, error) {
-	resp, err := c.get("/sessions/" + sessionID + "/stdin/" + entryID + "/status")
-	if err != nil {
-		return "", err
-	}
-	defer drainClose(resp)
-	var result struct {
-		Status string `json:"status"`
-	}
-	return result.Status, json.NewDecoder(resp.Body).Decode(&result)
 }
 
 // timestampToTime parses an RFC3339Nano timestamp string.
