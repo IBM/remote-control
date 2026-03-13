@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -68,21 +67,6 @@ func (s *Server) Addr() string {
 // Handler returns the HTTP handler for use with custom listeners (e.g., in tests).
 func (s *Server) Handler() http.Handler {
 	return s.httpServer.Handler
-}
-
-// clientIdentity extracts a client ID and common name from the request.
-// In Phase 6+ this uses TLS peer cert CN. Before TLS, falls back to a header.
-func (s *Server) clientIdentity(r *http.Request) (clientID, commonName string) {
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		cn := r.TLS.PeerCertificates[0].Subject.CommonName
-		return cn, cn
-	}
-	// Pre-TLS fallback: use a header or generate a synthetic ID.
-	clientID = r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = fmt.Sprintf("anon-%s", r.RemoteAddr)
-	}
-	return clientID, clientID
 }
 
 // checkClientApproved verifies that the requesting client is approved.
