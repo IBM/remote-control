@@ -9,7 +9,7 @@ import (
 
 // CreateSessionRequest is the body for POST /sessions.
 type CreateSessionRequest struct {
-	ID string `json:"command,omitempty"`
+	ID string `json:"id,omitempty"`
 }
 
 // SessionResponse is returned by session CRUD endpoints.
