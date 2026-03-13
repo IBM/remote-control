@@ -21,16 +21,6 @@ type SessionResponse struct {
 	ExitCode    *int       `json:"exit_code,omitempty"`
 }
 
-func sessionToResponse(s *session.Session) SessionResponse {
-	return SessionResponse{
-		ID:          s.ID,
-		Status:      string(s.GetStatus()),
-		CreatedAt:   s.CreatedAt,
-		CompletedAt: s.CompletedAt,
-		ExitCode:    s.ExitCode,
-	}
-}
-
 // AppendOutputRequest is the body for POST /sessions/{id}/output.
 type AppendOutputRequest struct {
 	Stream    string `json:"stream"`    // "stdout" or "stderr"
@@ -83,16 +73,6 @@ type StdinResponse struct {
 	Data      string `json:"data"` // base64-encoded
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
-}
-
-func stdinEntryToResponse(e *session.StdinEntry) StdinResponse {
-	return StdinResponse{
-		ID:        e.ID,
-		Source:    e.Source,
-		Data:      base64.StdEncoding.EncodeToString(e.Data),
-		Status:    string(e.Status),
-		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
-	}
 }
 
 // StdinStatusResponse is returned by GET /sessions/{id}/stdin/{sid}/status.

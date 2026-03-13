@@ -15,6 +15,28 @@ import (
 
 var handlerCh = alog.UseChannel("HANDLER")
 
+/* --- Helpers -------------------------------------------------------------- */
+
+func sessionToResponse(s *session.Session) SessionResponse {
+	return SessionResponse{
+		ID:          s.ID,
+		Status:      string(s.GetStatus()),
+		CreatedAt:   s.CreatedAt,
+		CompletedAt: s.CompletedAt,
+		ExitCode:    s.ExitCode,
+	}
+}
+
+func stdinEntryToResponse(e *session.StdinEntry) StdinResponse {
+	return StdinResponse{
+		ID:        e.ID,
+		Source:    e.Source,
+		Data:      base64.StdEncoding.EncodeToString(e.Data),
+		Status:    string(e.Status),
+		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
+	}
+}
+
 // writeJSON encodes v as JSON and writes it to w with the given status code.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -28,6 +50,8 @@ func readJSON(r *http.Request, v any) error {
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(v)
 }
+
+/* --- Main registration ---------------------------------------------------- */
 
 // handlers wires all HTTP routes onto mux.
 func (s *Server) registerRoutes() {
@@ -62,7 +86,7 @@ func (s *Server) registerRoutes() {
 	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/deny", s.handleDenyClient)
 }
 
-// --- Session CRUD ---
+/* --- Session CRUD --------------------------------------------------------- */
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
@@ -138,7 +162,7 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionToResponse(sess))
 }
 
-// --- Output ---
+/* --- Output --------------------------------------------------------------- */
 
 func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -298,19 +322,19 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- STDIN ---
+/* --- STDIN ---------------------------------------------------------------- */
 
 func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	handlerCh.Log(alog.DEBUG3, "Handling stdin for session [%s]", id)
+	// Extract client_id from query parameter (optional, for client submissions)
+	clientID := r.URL.Query().Get("client_id")
+	handlerCh.Log(alog.DEBUG3, "Handling stdin from client [%s] for session [%s]", clientID, id)
+
 	sess, err := s.store.Get(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
 	}
-
-	// Extract client_id from query parameter (optional, for client submissions)
-	clientID := r.URL.Query().Get("client_id")
 
 	// Determine if this is a host submission (no client_id provided)
 	isHostSubmission := clientID == ""
