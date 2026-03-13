@@ -341,7 +341,7 @@ func (ws *WebSocketConnection) handleDisconnect(ctx context.Context) {
 	}
 	ws.mu.Unlock()
 
-	wsCh.Log(alog.INFO, "[remote-control] WebSocket disconnected, attempting reconnect")
+	wsCh.Log(alog.DEBUG, "[remote-control] WebSocket disconnected, attempting reconnect")
 
 	// Spawn reconnect in a separate goroutine so readPump can exit cleanly
 	go ws.reconnect()

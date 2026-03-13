@@ -149,7 +149,7 @@ func (hc *HybridConnection) switchToPolling() {
 		return
 	}
 
-	hybridCh.Log(alog.INFO, "[remote-control] switching to polling mode")
+	hybridCh.Log(alog.DEBUG, "[remote-control] switching to polling mode")
 	hc.mode = ModePolling
 
 	// Stop WebSocket reconnection and close the connection
@@ -177,7 +177,7 @@ func (hc *HybridConnection) tryWebSocketUpgrade() {
 	defer hc.modeMu.Unlock()
 
 	if hc.mode == ModePolling {
-		hybridCh.Log(alog.INFO, "[remote-control] upgraded to WebSocket mode")
+		hybridCh.Log(alog.DEBUG, "[remote-control] upgraded to WebSocket mode")
 		hc.mode = ModeWebSocket
 		hc.wsFailures = 0
 
@@ -195,7 +195,7 @@ func (hc *HybridConnection) handleWebSocketError(err error) {
 	hc.modeMu.Unlock()
 
 	if failures >= threshold {
-		hybridCh.Log(alog.INFO, "[remote-control] WebSocket failures (%d) exceeded threshold (%d), falling back to polling", failures, threshold)
+		hybridCh.Log(alog.DEBUG, "[remote-control] WebSocket failures (%d) exceeded threshold (%d), falling back to polling", failures, threshold)
 		hc.switchToPolling()
 	} else {
 		hybridCh.Log(alog.DEBUG, "[remote-control] WebSocket error (%d/%d failures): %v", failures, threshold, err)
