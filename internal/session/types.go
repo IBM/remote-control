@@ -31,7 +31,6 @@ type OutputChunk struct {
 
 // StdinEntry is a single unit of stdin data submitted by a client or the host.
 type StdinEntry struct {
-	ID     uint64 `json:"id"`
-	Source string `json:"source"` // "host" or a client ID
-	Data   []byte `json:"data"`
+	ID   uint64 `json:"id"`
+	Data []byte `json:"data"`
 }

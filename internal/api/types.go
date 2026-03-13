@@ -72,9 +72,8 @@ type AckStdinRequest struct {
 
 // StdinResponse is returned by GET /sessions/{id}/stdin.
 type StdinResponse struct {
-	ID     uint64 `json:"id"`
-	Source string `json:"source"`
-	Data   string `json:"data"` // base64-encoded
+	ID   uint64 `json:"id"`
+	Data string `json:"data"` // base64-encoded
 }
 
 // StdinStatusResponse is returned by GET /sessions/{id}/stdin/{sid}/status.

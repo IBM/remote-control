@@ -223,7 +223,7 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 	}
 
 	wsHandlerCh.Log(alog.DEBUG3, "Enqueuing stdin to session", sess.ID)
-	entry := sess.EnqueueStdin(msg.ClientID, data)
+	entry := sess.EnqueueStdin(data)
 
 	// Broadcast to all subscribers (including host)
 	s.connMgr.Broadcast(msg.SessionID, WSMessage{
@@ -296,9 +296,8 @@ func (s *Server) sendError(connection *Connection, sessionID, message string) {
 
 func marshalStdinEntry(entry *session.StdinEntry) json.RawMessage {
 	payload := StdinPayload{
-		ID:     entry.ID,
-		Data:   base64.StdEncoding.EncodeToString(entry.Data),
-		Source: entry.Source,
+		ID:   entry.ID,
+		Data: base64.StdEncoding.EncodeToString(entry.Data),
 	}
 	data, _ := json.Marshal(payload)
 	return data

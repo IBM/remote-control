@@ -240,12 +240,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 	}
 }
 
-// proxyLocalStdinRaw reads individual bytes from os.Stdin (raw terminal mode),
-// writes them directly to the PTY for immediate echo, and submits to the server
-// queue for client visibility. This avoids the echo loop by:
-// 1. Writing directly to PTY immediately (terminal handles echo)
-// 2. Submitting to server (marked as "host" source)
-// 3. Skipping write when polling sees "host" entries
+// proxyLocalStdinRaw reads individual bytes from os.Stdin (raw terminal mode)
 //
 // Each keystroke is submitted individually (threshold: 1 byte) for responsiveness.
 func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string, wsHost *WebSocketHost) {
@@ -349,11 +344,6 @@ func (h *Host) processServerStdinEntry(ctx context.Context, client *APIClient, s
 	data, err := base64.StdEncoding.DecodeString(entry.Data)
 	if err != nil || len(data) == 0 {
 		return fmt.Errorf("invalid entry data")
-	}
-
-	// Skip host entries to avoid echo loop
-	if entry.Source == "host" {
-		return nil
 	}
 
 	// Write client entries to subprocess

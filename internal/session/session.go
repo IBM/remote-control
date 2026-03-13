@@ -151,13 +151,12 @@ func (s *Session) StreamOffset(stream Stream) int64 {
 }
 
 // EnqueueStdin appends a new stdin entry to the session's STDIN queue.
-func (s *Session) EnqueueStdin(source string, data []byte) StdinEntry {
+func (s *Session) EnqueueStdin(data []byte) StdinEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := StdinEntry{
-		ID:     s.stdinNextId,
-		Source: source,
-		Data:   data,
+		ID:   s.stdinNextId,
+		Data: data,
 	}
 	s.stdinNextId++
 	s.stdin = append(s.stdin, &entry)
@@ -169,7 +168,7 @@ func (s *Session) EnqueueStdin(source string, data []byte) StdinEntry {
 func (s *Session) PeekStdin() *StdinEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	sessCh.Log(alog.DEBUG2, "Peeking stdin (%d entries)", len(s.stdin))
+	sessCh.Log(alog.DEBUG4, "Peeking stdin (%d entries)", len(s.stdin))
 	if len(s.stdin) == 0 {
 		return nil
 	}

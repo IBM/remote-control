@@ -28,9 +28,8 @@ func sessionToResponse(s *session.Session) SessionResponse {
 
 func stdinEntryToResponse(e *session.StdinEntry) StdinResponse {
 	return StdinResponse{
-		ID:     e.ID,
-		Source: e.Source,
-		Data:   base64.StdEncoding.EncodeToString(e.Data),
+		ID:   e.ID,
+		Data: base64.StdEncoding.EncodeToString(e.Data),
 	}
 }
 
@@ -356,14 +355,7 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use "host" as source identifier for host submissions
-	source := clientID
-	// TODO: remove source from stdin
-	if isHostSubmission {
-		source = "host"
-	}
-	entry := sess.EnqueueStdin(source, data)
-
+	entry := sess.EnqueueStdin(data)
 	writeJSON(w, http.StatusCreated, stdinEntryToResponse(&entry))
 }
 
