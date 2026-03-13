@@ -47,6 +47,27 @@ func (s *Session) RegisterClient(clientID string) *ClientRecord {
 	return record
 }
 
+// EnsureClientRecord returns an existing client record or creates a new one.
+// Used for server restart recovery when client state is lost.
+func (s *Session) EnsureClientRecord(clientID string) *ClientRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec, ok := s.clients[clientID]; ok {
+		return rec
+	}
+	now := time.Now()
+	record := &ClientRecord{
+		ClientID:     clientID,
+		JoinedAt:     now,
+		Approval:     ApprovalPending,
+		LastPollAt:   now,
+		StdoutOffset: 0,
+		StderrOffset: 0,
+	}
+	s.clients[clientID] = record
+	return record
+}
+
 // ApproveClient approves a client with the given permission level.
 func (s *Session) ApproveClient(clientID string, perm Permission) error {
 	s.mu.Lock()
@@ -116,7 +137,9 @@ func (s *Session) UpdateClientActivity(clientID string, stdoutOffset, stderrOffs
 	defer s.mu.Unlock()
 	rec, ok := s.clients[clientID]
 	if !ok {
-		return errNotFound(clientID)
+		s.RegisterClient(clientID)
+		rec, _ = s.clients[clientID]
+		// return errNotFound(clientID)
 	}
 	rec.LastPollAt = time.Now()
 	rec.StdoutOffset = stdoutOffset

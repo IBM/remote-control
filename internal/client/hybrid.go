@@ -152,7 +152,8 @@ func (hc *HybridConnection) switchToPolling() {
 	hybridCh.Log(alog.INFO, "[remote-control] switching to polling mode")
 	hc.mode = ModePolling
 
-	// Close WebSocket
+	// Stop WebSocket reconnection and close the connection
+	hc.ws.StopReconnect()
 	hc.ws.Close()
 
 	// Start polling

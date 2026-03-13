@@ -85,9 +85,10 @@ type WebSocketConnection struct {
 	reconnectDelay    time.Duration
 	maxReconnectDelay time.Duration
 
-	send chan []byte
-	done chan struct{}
-	mu   sync.RWMutex
+	stopReconnect chan struct{}
+	send          chan []byte
+	done          chan struct{}
+	mu            sync.RWMutex
 
 	connected bool
 }
@@ -103,6 +104,7 @@ func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, session
 		maxReconnectDelay: 30 * time.Second,
 		send:              make(chan []byte, 256),
 		done:              make(chan struct{}),
+		stopReconnect:     make(chan struct{}),
 	}
 }
 
@@ -127,6 +129,14 @@ func (ws *WebSocketConnection) Connect(ctx context.Context) error {
 	if ws.connected {
 		ws.mu.Unlock()
 		return nil
+	}
+
+	// Re-create channels if they were closed
+	if ws.done == nil {
+		ws.done = make(chan struct{})
+	}
+	if ws.stopReconnect == nil {
+		ws.stopReconnect = make(chan struct{})
 	}
 	ws.mu.Unlock()
 
@@ -333,15 +343,16 @@ func (ws *WebSocketConnection) handleDisconnect(ctx context.Context) {
 
 	wsCh.Log(alog.INFO, "[remote-control] WebSocket disconnected, attempting reconnect")
 
-	// Attempt reconnection with exponential backoff
-	ws.reconnect(ctx)
+	// Spawn reconnect in a separate goroutine so readPump can exit cleanly
+	go ws.reconnect()
 }
 
 // reconnect attempts to re-establish the connection
-func (ws *WebSocketConnection) reconnect(ctx context.Context) {
+func (ws *WebSocketConnection) reconnect() {
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ws.stopReconnect:
+			wsCh.Log(alog.DEBUG, "[remote-control] reconnection stopped")
 			return
 		case <-ws.done:
 			return
@@ -349,7 +360,10 @@ func (ws *WebSocketConnection) reconnect(ctx context.Context) {
 			ws.reconnectAttempts++
 			wsCh.Log(alog.DEBUG, "[remote-control] reconnect attempt %d", ws.reconnectAttempts)
 
+			// Create fresh context with timeout for this reconnection attempt
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if err := ws.Connect(ctx); err != nil {
+				cancel()
 				wsCh.Log(alog.DEBUG, "[remote-control] reconnect failed: %v", err)
 				// Exponential backoff
 				ws.reconnectDelay *= 2
@@ -358,6 +372,7 @@ func (ws *WebSocketConnection) reconnect(ctx context.Context) {
 				}
 				continue
 			}
+			cancel()
 
 			// Reconnection successful
 			ws.reconnectDelay = 1 * time.Second
@@ -428,9 +443,20 @@ func (ws *WebSocketConnection) Close() error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
+	// Signal reconnection to stop (idempotent)
+	select {
+	case <-ws.stopReconnect:
+		// Already closed
+	default:
+		close(ws.stopReconnect)
+	}
+
+	// Signal completion (idempotent)
 	select {
 	case <-ws.done:
-		return nil
+		// Already closed, re-create for potential reconnection
+		ws.done = make(chan struct{})
+		ws.stopReconnect = make(chan struct{})
 	default:
 		close(ws.done)
 	}
@@ -443,6 +469,17 @@ func (ws *WebSocketConnection) Close() error {
 
 	ws.connected = false
 	return nil
+}
+
+// StopReconnect signals the reconnection goroutine to stop.
+// This is called when switching to polling mode.
+func (ws *WebSocketConnection) StopReconnect() {
+	select {
+	case <-ws.stopReconnect:
+		return
+	default:
+		close(ws.stopReconnect)
+	}
 }
 
 // Helper function

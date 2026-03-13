@@ -168,6 +168,12 @@ func (s *Server) handleSubscribe(connection *Connection, msg WSMessage, actualCl
 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] client ID set to %s", payload.ClientID)
 	}
 
+	// Auto-register client with session if not already registered
+	// This is needed when the server restarts and loses client state
+	if sess, err := s.store.Get(payload.SessionID); err == nil {
+		sess.EnsureClientRecord(payload.ClientID)
+	}
+
 	// Subscribe to session
 	if err := s.connMgr.Subscribe(payload.ClientID, payload.SessionID); err != nil {
 		return err
