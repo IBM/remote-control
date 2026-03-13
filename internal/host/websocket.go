@@ -36,8 +36,7 @@ const (
 	MsgTypeUnsubscribed     = "unsubscribed"
 	MsgTypeSubscribe        = "subscribe"
 	MsgTypeUnsubscribe      = "unsubscribe"
-	MsgTypeStdinAccept      = "stdin_accept"
-	MsgTypeStdinReject      = "stdin_reject"
+	MsgTypeStdinAck         = "stdin_ack"
 	MsgTypeStdinSubmit      = "stdin_submit"
 	MsgTypePing             = "ping"
 )
@@ -378,43 +377,15 @@ func (wh *WebSocketHost) SendOutput(stream string, data []byte, offset int64, ti
 	}
 }
 
-// AcceptStdin sends a stdin accept message
-func (wh *WebSocketHost) AcceptStdin(entryID string) error {
+// AckStdin sends a stdin ack message
+func (wh *WebSocketHost) AckStdin(entryID string) error {
 	payload := StdinPayload{
 		ID: entryID,
 	}
 	payloadData, _ := json.Marshal(payload)
 
 	msg := WSMessage{
-		Type:      MsgTypeStdinAccept,
-		SessionID: wh.sessionID,
-		Payload:   payloadData,
-	}
-
-	msgData, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	select {
-	case wh.send <- msgData:
-		return nil
-	case <-wh.done:
-		return fmt.Errorf("connection closed")
-	default:
-		return fmt.Errorf("send buffer full")
-	}
-}
-
-// RejectStdin sends a stdin reject message
-func (wh *WebSocketHost) RejectStdin(entryID string) error {
-	payload := StdinPayload{
-		ID: entryID,
-	}
-	payloadData, _ := json.Marshal(payload)
-
-	msg := WSMessage{
-		Type:      MsgTypeStdinReject,
+		Type:      MsgTypeStdinAck,
 		SessionID: wh.sessionID,
 		Payload:   payloadData,
 	}

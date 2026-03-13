@@ -333,28 +333,26 @@ func (h *Host) processServerStdinEntry(ctx context.Context, client *APIClient, s
 		ch.Log(alog.DEBUG, "[remote-control] peek stdin error: %v", err)
 		return err
 	}
-	if entry == nil {
+	if entry == nil || entry.ID == 0 {
+		ch.Log(alog.DEBUG2, "[remote-control] no stdin found")
 		return nil
 	}
 
-	// Check source - skip host entries (already written)
-	isHostEntry := entry.Source == "host"
-
 	// Accept the entry
-	if err := client.AcceptStdin(sessionID, entry.ID); err != nil {
+	if err := client.AckStdin(sessionID, entry.ID); err != nil {
 		ch.Log(alog.DEBUG, "[remote-control] accept stdin error: %v", err)
-		_ = client.RejectStdin(sessionID, entry.ID)
 		return err
 	}
+	ch.Log(alog.DEBUG2, "[remote-control] Ack'ed stdin: %d", entry.ID)
 
+	// If the data is invalid, it's already ack'ed on the server, so just return
 	data, err := base64.StdEncoding.DecodeString(entry.Data)
 	if err != nil || len(data) == 0 {
-		_ = client.RejectStdin(sessionID, entry.ID)
 		return fmt.Errorf("invalid entry data")
 	}
 
 	// Skip host entries to avoid echo loop
-	if isHostEntry {
+	if entry.Source == "host" {
 		return nil
 	}
 

@@ -129,32 +129,19 @@ func (c *APIClient) PeekStdin(sessionID string) (*PendingStdin, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-	if result.ID == "" {
-		return nil, nil
-	}
 	return &result, nil
 }
 
 // PendingStdin is a pending stdin entry returned from the server.
 type PendingStdin struct {
-	ID     string `json:"id"`
+	ID     uint64 `json:"id"`
 	Source string `json:"source"`
 	Data   string `json:"data"` // base64
 }
 
-// AcceptStdin marks a stdin entry as accepted.
-func (c *APIClient) AcceptStdin(sessionID, entryID string) error {
-	resp, err := c.post("/sessions/"+sessionID+"/stdin/"+entryID+"/accept", nil)
-	if err != nil {
-		return err
-	}
-	drainClose(resp)
-	return nil
-}
-
-// RejectStdin marks a stdin entry as rejected.
-func (c *APIClient) RejectStdin(sessionID, entryID string) error {
-	resp, err := c.post("/sessions/"+sessionID+"/stdin/"+entryID+"/reject", nil)
+// AckStdin marks a stdin entry as processed.
+func (c *APIClient) AckStdin(sessionID string, entryID uint64) error {
+	resp, err := c.post("/sessions/"+sessionID+"/stdin/ack", map[string]uint64{"id": entryID})
 	if err != nil {
 		return err
 	}
@@ -237,23 +224,4 @@ func (c *APIClient) SubmitHostStdin(sessionID string, data []byte) (string, erro
 		ID string `json:"id"`
 	}
 	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
-}
-
-// GetHostStdinStatus polls for the status of a host-submitted stdin entry.
-func (c *APIClient) GetHostStdinStatus(sessionID, entryID string) string {
-	resp, err := c.get("/sessions/" + sessionID + "/stdin/" + entryID + "/status")
-	if err != nil {
-		return "pending"
-	}
-	defer drainClose(resp)
-	if resp.StatusCode == http.StatusNotFound {
-		return "consumed"
-	}
-	var result struct {
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "pending"
-	}
-	return result.Status
 }
