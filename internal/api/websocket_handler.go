@@ -9,7 +9,6 @@ import (
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/session"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -92,15 +91,9 @@ func (s *Server) readPump(connection *Connection, initialClientID string) {
 				s.sendError(connection, msg.SessionID, err.Error())
 			}
 
-		case MsgTypeStdinAccept:
-			if err := s.handleStdinAcceptWS(connection, msg); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin accept error: %v", err)
-				s.sendError(connection, msg.SessionID, err.Error())
-			}
-
-		case MsgTypeStdinReject:
-			if err := s.handleStdinRejectWS(connection, msg); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin reject error: %v", err)
+		case MsgTypeStdinAck:
+			if err := s.handleStdinAckWS(connection, msg); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin ack error: %v", err)
 				s.sendError(connection, msg.SessionID, err.Error())
 			}
 
@@ -229,15 +222,8 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 		return err
 	}
 
-	entry := session.StdinEntry{
-		ID:        uuid.New().String(),
-		Source:    msg.ClientID,
-		Data:      data,
-		Timestamp: time.Now(),
-		Status:    session.StdinPending,
-	}
 	wsHandlerCh.Log(alog.DEBUG3, "Enqueuing stdin to session", sess.ID)
-	sess.EnqueueStdin(entry)
+	entry := sess.EnqueueStdin(msg.ClientID, data)
 
 	// Broadcast to all subscribers (including host)
 	s.connMgr.Broadcast(msg.SessionID, WSMessage{
@@ -249,8 +235,8 @@ func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) erro
 	return nil
 }
 
-// handleStdinAcceptWS processes stdin accept messages via WebSocket
-func (s *Server) handleStdinAcceptWS(connection *Connection, msg WSMessage) error {
+// handleStdinAckWS processes stdin ack messages via WebSocket
+func (s *Server) handleStdinAckWS(connection *Connection, msg WSMessage) error {
 	var payload StdinPayload
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return err
@@ -261,32 +247,11 @@ func (s *Server) handleStdinAcceptWS(connection *Connection, msg WSMessage) erro
 		return err
 	}
 
-	if err := sess.AcceptStdin(payload.ID, time.Now()); err != nil {
+	if err := sess.AckStdin(payload.ID); err != nil {
 		return err
-	}
-
-	// Purge consumed stdin
-	purged := sess.PurgeConsumedStdin()
-	if purged > 0 {
-		wsHandlerCh.Log(alog.DEBUG, "[remote-control] purged stdin entries: %d", purged)
 	}
 
 	return nil
-}
-
-// handleStdinRejectWS processes stdin reject messages via WebSocket
-func (s *Server) handleStdinRejectWS(connection *Connection, msg WSMessage) error {
-	var payload StdinPayload
-	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-		return err
-	}
-
-	sess, err := s.store.Get(msg.SessionID)
-	if err != nil {
-		return err
-	}
-
-	return sess.RejectStdin(payload.ID)
 }
 
 // Helper functions to send messages
@@ -331,11 +296,9 @@ func (s *Server) sendError(connection *Connection, sessionID, message string) {
 
 func marshalStdinEntry(entry *session.StdinEntry) json.RawMessage {
 	payload := StdinPayload{
-		ID:        entry.ID,
-		Data:      base64.StdEncoding.EncodeToString(entry.Data),
-		Source:    entry.Source,
-		Status:    string(entry.Status),
-		Timestamp: entry.Timestamp.Format(time.RFC3339Nano),
+		ID:     entry.ID,
+		Data:   base64.StdEncoding.EncodeToString(entry.Data),
+		Source: entry.Source,
 	}
 	data, _ := json.Marshal(payload)
 	return data

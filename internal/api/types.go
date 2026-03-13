@@ -61,18 +61,20 @@ type PatchSessionRequest struct {
 }
 
 // StdinRequest is the body for POST /sessions/{id}/stdin.
-// The client_id is now passed as a query parameter instead of in the body.
 type StdinRequest struct {
 	Data string `json:"data"` // base64-encoded
 }
 
+// AckStdinRequest is the body for POST /sessions/{id}/stdin/ack.
+type AckStdinRequest struct {
+	ID uint64 `json:"id"`
+}
+
 // StdinResponse is returned by GET /sessions/{id}/stdin.
 type StdinResponse struct {
-	ID        string `json:"id"`
-	Source    string `json:"source"`
-	Data      string `json:"data"` // base64-encoded
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
+	ID     uint64 `json:"id"`
+	Source string `json:"source"`
+	Data   string `json:"data"` // base64-encoded
 }
 
 // StdinStatusResponse is returned by GET /sessions/{id}/stdin/{sid}/status.

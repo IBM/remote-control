@@ -10,7 +10,6 @@ import (
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/session"
-	"github.com/google/uuid"
 )
 
 var handlerCh = alog.UseChannel("HANDLER")
@@ -29,11 +28,9 @@ func sessionToResponse(s *session.Session) SessionResponse {
 
 func stdinEntryToResponse(e *session.StdinEntry) StdinResponse {
 	return StdinResponse{
-		ID:        e.ID,
-		Source:    e.Source,
-		Data:      base64.StdEncoding.EncodeToString(e.Data),
-		Status:    string(e.Status),
-		Timestamp: e.Timestamp.Format(time.RFC3339Nano),
+		ID:     e.ID,
+		Source: e.Source,
+		Data:   base64.StdEncoding.EncodeToString(e.Data),
 	}
 }
 
@@ -74,9 +71,7 @@ func (s *Server) registerRoutes() {
 	// STDIN
 	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdin)
 	mux.HandleFunc("GET /sessions/{id}/stdin", s.handlePeekStdin)
-	mux.HandleFunc("POST /sessions/{id}/stdin/{sid}/accept", s.handleAcceptStdin)
-	mux.HandleFunc("POST /sessions/{id}/stdin/{sid}/reject", s.handleRejectStdin)
-	mux.HandleFunc("GET /sessions/{id}/stdin/{sid}/status", s.handleStdinStatus)
+	mux.HandleFunc("POST /sessions/{id}/stdin/ack", s.handleAckStdin)
 
 	// Approval (Phase 7)
 	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClient)
@@ -363,35 +358,11 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 
 	// Use "host" as source identifier for host submissions
 	source := clientID
+	// TODO: remove source from stdin
 	if isHostSubmission {
 		source = "host"
 	}
-
-	entry := session.StdinEntry{
-		ID:        uuid.New().String(),
-		Source:    source,
-		Data:      data,
-		Timestamp: time.Now(),
-		Status:    session.StdinPending,
-	}
-	sess.EnqueueStdin(entry)
-
-	// Broadcast to WebSocket subscribers (including host)
-	if s.connMgr != nil {
-		payload := StdinPayload{
-			ID:        entry.ID,
-			Data:      base64.StdEncoding.EncodeToString(entry.Data),
-			Source:    entry.Source,
-			Status:    string(entry.Status),
-			Timestamp: entry.Timestamp.Format(time.RFC3339Nano),
-		}
-		payloadData, _ := json.Marshal(payload)
-		s.connMgr.Broadcast(id, WSMessage{
-			Type:      MsgTypeStdinPending,
-			SessionID: id,
-			Payload:   payloadData,
-		})
-	}
+	entry := sess.EnqueueStdin(source, data)
 
 	writeJSON(w, http.StatusCreated, stdinEntryToResponse(&entry))
 }
@@ -411,55 +382,22 @@ func (s *Server) handlePeekStdin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stdinEntryToResponse(entry))
 }
 
-func (s *Server) handleAcceptStdin(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAckStdin(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sid := r.PathValue("sid")
+	var req AckStdinRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
+		return
+	}
 	sess, err := s.store.Get(id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
 	}
-	if err := sess.AcceptStdin(sid, time.Now()); err != nil {
+	if err := sess.AckStdin(req.ID); err != nil {
 		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
 		return
-	}
-
-	// Event-driven cleanup: purge consumed stdin entries
-	purged := sess.PurgeConsumedStdin()
-	if purged > 0 {
-		handlerCh.Log(alog.DEBUG, "[remote-control] purged stdin entries: %d", purged)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleRejectStdin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	sid := r.PathValue("sid")
-	sess, err := s.store.Get(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	if err := sess.RejectStdin(sid); err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleStdinStatus(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	sid := r.PathValue("sid")
-	sess, err := s.store.Get(id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	status, err := sess.GetStdinStatus(sid)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, StdinStatusResponse{Status: string(status)})
 }

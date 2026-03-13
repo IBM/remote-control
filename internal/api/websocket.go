@@ -39,8 +39,7 @@ const (
 	MsgTypeSubscribe   = "subscribe"
 	MsgTypeUnsubscribe = "unsubscribe"
 	MsgTypeStdinSubmit = "stdin_submit"
-	MsgTypeStdinAccept = "stdin_accept"
-	MsgTypeStdinReject = "stdin_reject"
+	MsgTypeStdinAck    = "stdin_ack"
 	MsgTypePing        = "ping"
 )
 
@@ -54,11 +53,9 @@ type OutputChunkPayload struct {
 
 // StdinPayload is the payload for stdin-related messages
 type StdinPayload struct {
-	ID        string `json:"id,omitempty"`
-	Data      string `json:"data,omitempty"` // base64-encoded
-	Source    string `json:"source,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"` // RFC3339Nano
+	ID     uint64 `json:"id,omitempty"`
+	Data   string `json:"data,omitempty"` // base64-encoded
+	Source string `json:"source,omitempty"`
 }
 
 // SubscribePayload is the payload for subscribe messages
