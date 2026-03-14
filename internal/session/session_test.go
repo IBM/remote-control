@@ -15,7 +15,6 @@ func TestAppendAndReadOutput(t *testing.T) {
 	s.AppendOutput(StreamStdout, []byte(" world"), t2)
 	s.AppendOutput(StreamStderr, []byte("err1"), t1)
 
-	// Read all stdout from offset 0
 	chunks, _ := s.ReadOutput(StreamStdout, 0)
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 stdout chunks, got %d", len(chunks))
@@ -27,14 +26,12 @@ func TestAppendAndReadOutput(t *testing.T) {
 		t.Errorf("unexpected second chunk: %+v", chunks[1])
 	}
 
-	// Stream labels preserved
 	for _, ch := range chunks {
 		if ch.Stream != StreamStdout {
 			t.Errorf("expected stdout stream label, got %q", ch.Stream)
 		}
 	}
 
-	// Read stderr
 	errChunks, _ := s.ReadOutput(StreamStderr, 0)
 	if len(errChunks) != 1 || errChunks[0].Stream != StreamStderr {
 		t.Errorf("unexpected stderr chunks: %+v", errChunks)
@@ -47,13 +44,11 @@ func TestReadOutputFromOffset(t *testing.T) {
 	s.AppendOutput(StreamStdout, []byte("hello"), now)
 	s.AppendOutput(StreamStdout, []byte(" world"), now.Add(time.Millisecond))
 
-	// Read from offset 5 (start of second chunk)
 	chunks, _ := s.ReadOutput(StreamStdout, 5)
 	if len(chunks) != 1 || string(chunks[0].Data) != " world" {
 		t.Errorf("expected second chunk from offset 5, got %+v", chunks)
 	}
 
-	// Read from offset 3 (within first chunk)
 	chunks, _ = s.ReadOutput(StreamStdout, 3)
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 chunks from offset 3, got %d", len(chunks))
@@ -85,7 +80,6 @@ func TestConcurrentAppendOutput(t *testing.T) {
 	if totalBytes != int64(writes) {
 		t.Errorf("expected %d bytes total, got %d", writes, totalBytes)
 	}
-	// Verify offsets are correct (no overlaps, monotonically increasing).
 	var prevEnd int64
 	for _, ch := range chunks {
 		if ch.Offset != prevEnd {
@@ -97,22 +91,26 @@ func TestConcurrentAppendOutput(t *testing.T) {
 
 func TestStdinFIFO(t *testing.T) {
 	s := newSession("test-4")
-	now := time.Now()
 
-	s.EnqueueStdin(StdinEntry{ID: "1", Source: "client-a", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
-	s.EnqueueStdin(StdinEntry{ID: "2", Source: "client-b", Data: []byte("pwd\n"), Status: StdinPending, Timestamp: now.Add(time.Millisecond)})
+	s1 := s.EnqueueStdin([]byte("ls\n"))
+	s2 := s.EnqueueStdin([]byte("pwd\n"))
 
-	first := s.DequeueStdin()
-	if first == nil || first.ID != "1" {
-		t.Errorf("expected first entry ID=1, got %+v", first)
+	entry := s.PeekStdin()
+	if entry == nil || entry.ID != s1.ID {
+		t.Errorf("expected first entry ID=%d, got %+v", s1.ID, entry)
 	}
-	second := s.DequeueStdin()
-	if second == nil || second.ID != "2" {
-		t.Errorf("expected second entry ID=2, got %+v", second)
+
+	s.AckStdin(s1.ID)
+
+	entry = s.PeekStdin()
+	if entry == nil || entry.ID != s2.ID {
+		t.Errorf("expected second entry ID=%d, got %+v", s2.ID, entry)
 	}
-	empty := s.DequeueStdin()
-	if empty != nil {
-		t.Errorf("expected nil from empty queue, got %+v", empty)
+
+	s.AckStdin(s2.ID)
+
+	if s.PeekStdin() != nil {
+		t.Errorf("expected nil from empty queue")
 	}
 }
 
@@ -133,62 +131,36 @@ func TestComplete(t *testing.T) {
 	}
 }
 
-func TestStdinAcceptReject(t *testing.T) {
+func TestStdinAck(t *testing.T) {
 	s := newSession("test-6")
-	now := time.Now()
-	s.EnqueueStdin(StdinEntry{ID: "a", Source: "client", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
-	s.EnqueueStdin(StdinEntry{ID: "b", Source: "client", Data: []byte("pwd\n"), Status: StdinPending, Timestamp: now.Add(time.Millisecond)})
 
-	// PeekStdin returns first pending without removing.
+	e1 := s.EnqueueStdin([]byte("ls\n"))
+	e2 := s.EnqueueStdin([]byte("pwd\n"))
+
 	entry := s.PeekStdin()
-	if entry == nil || entry.ID != "a" {
-		t.Errorf("expected peek to return 'a', got %+v", entry)
-	}
-	// Still there after peek.
-	entry2 := s.PeekStdin()
-	if entry2 == nil || entry2.ID != "a" {
-		t.Errorf("expected peek to still return 'a', got %+v", entry2)
+	if entry == nil || entry.ID != e1.ID {
+		t.Errorf("expected peek to return %d, got %+v", e1.ID, entry)
 	}
 
-	// Accept.
-	acceptTime := now.Add(time.Second)
-	if err := s.AcceptStdin("a", acceptTime); err != nil {
-		t.Errorf("unexpected error accepting: %v", err)
-	}
-	status, err := s.GetStdinStatus("a")
-	if err != nil || status != StdinAccepted {
-		t.Errorf("expected accepted status, got %v, err=%v", status, err)
+	entry = s.PeekStdin()
+	if entry == nil || entry.ID != e1.ID {
+		t.Errorf("expected peek to still return %d, got %+v", e1.ID, entry)
 	}
 
-	// RejectAllPending.
-	ids := s.RejectAllPending()
-	if len(ids) != 1 || ids[0] != "b" {
-		t.Errorf("expected ['b'] rejected, got %v", ids)
+	if err := s.AckStdin(e1.ID); err != nil {
+		t.Errorf("unexpected error acking: %v", err)
 	}
-	status, _ = s.GetStdinStatus("b")
-	if status != StdinRejected {
-		t.Errorf("expected rejected status for 'b'")
+
+	entry = s.PeekStdin()
+	if entry == nil || entry.ID != e2.ID {
+		t.Errorf("expected peek to return %d after ack, got %+v", e2.ID, entry)
 	}
 }
 
-func TestRejectStdin(t *testing.T) {
-	s := newSession("test-rs")
-	now := time.Now()
-	s.EnqueueStdin(StdinEntry{ID: "x", Source: "client", Data: []byte("ls\n"), Status: StdinPending, Timestamp: now})
+func TestStdinAckNotFound(t *testing.T) {
+	s := newSession("test-ack-notfound")
 
-	if err := s.RejectStdin("x"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	status, err := s.GetStdinStatus("x")
-	if err != nil || status != StdinRejected {
-		t.Errorf("expected rejected, got %v, err=%v", status, err)
-	}
-}
-
-func TestRejectStdinNotFound(t *testing.T) {
-	s := newSession("test-rsn")
-
-	err := s.RejectStdin("nonexistent")
+	err := s.AckStdin(999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent stdin entry")
 	}

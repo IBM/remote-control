@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// makeSession creates a session in ts and returns its ID.
 func makeSession(t *testing.T, ts *httptest.Server) string {
 	t.Helper()
 	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
@@ -18,7 +17,6 @@ func makeSession(t *testing.T, ts *httptest.Server) string {
 	return created.ID
 }
 
-// enqueueStdin enqueues a base64-encoded stdin entry and returns the entry response.
 func enqueueStdin(t *testing.T, ts *httptest.Server, sid, data string) StdinResponse {
 	t.Helper()
 	encoded := base64.StdEncoding.EncodeToString([]byte(data))
@@ -28,7 +26,6 @@ func enqueueStdin(t *testing.T, ts *httptest.Server, sid, data string) StdinResp
 	return entry
 }
 
-// patchSession sends a PATCH request for session completion.
 func patchSession(t *testing.T, ts *httptest.Server, sid string, exitCode int) *http.Response {
 	t.Helper()
 	data, _ := json.Marshal(PatchSessionRequest{ExitCode: exitCode})
@@ -41,69 +38,27 @@ func patchSession(t *testing.T, ts *httptest.Server, sid string, exitCode int) *
 	return resp
 }
 
-// --- Stdin accept / reject / status ---
-
-func TestStdinAcceptAndStatus(t *testing.T) {
+func TestStdinAck(t *testing.T) {
 	_, ts := newTestServer(t)
 	sid := makeSession(t, ts)
 	entry := enqueueStdin(t, ts, sid, "ls -la\n")
 
-	// Check status before accepting
-	statusResp := getJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/status")
-	if statusResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", statusResp.StatusCode)
+	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin/ack", AckStdinRequest{ID: entry.ID})
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
 	}
-	var statusResult StdinStatusResponse
-	decodeJSON(t, statusResp, &statusResult)
-	if statusResult.Status != "pending" {
-		t.Errorf("expected pending before accept, got %s", statusResult.Status)
-	}
-
-	// Accept the entry
-	acceptResp := postJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/accept", nil)
-	if acceptResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", acceptResp.StatusCode)
-	}
-	acceptResp.Body.Close()
-
-	// After accepting, the entry is purged from memory, so we can't check status
-	// The successful 204 response is sufficient verification
+	resp.Body.Close()
 }
 
-func TestStdinReject(t *testing.T) {
+func TestStdinAckNotFound(t *testing.T) {
 	_, ts := newTestServer(t)
 	sid := makeSession(t, ts)
-	entry := enqueueStdin(t, ts, sid, "ls\n")
 
-	rejectResp := postJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/reject", nil)
-	if rejectResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", rejectResp.StatusCode)
+	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin/ack", AckStdinRequest{ID: 999})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
-	rejectResp.Body.Close()
-
-	statusResp := getJSON(t, ts, "/sessions/"+sid+"/stdin/"+entry.ID+"/status")
-	var statusResult StdinStatusResponse
-	decodeJSON(t, statusResp, &statusResult)
-	if statusResult.Status != "rejected" {
-		t.Errorf("expected rejected, got %s", statusResult.Status)
-	}
-}
-
-func TestStdinRejectAll(t *testing.T) {
-	_, ts := newTestServer(t)
-	sid := makeSession(t, ts)
-	enqueueStdin(t, ts, sid, "ls\n")
-	enqueueStdin(t, ts, sid, "pwd\n")
-
-	rejectAllResp := postJSON(t, ts, "/sessions/"+sid+"/stdin/reject-all", nil)
-	if rejectAllResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rejectAllResp.StatusCode)
-	}
-	var result map[string][]string
-	decodeJSON(t, rejectAllResp, &result)
-	if len(result["rejected_ids"]) != 2 {
-		t.Errorf("expected 2 rejected IDs, got %d", len(result["rejected_ids"]))
-	}
+	resp.Body.Close()
 }
 
 func TestStdinPeekEmpty(t *testing.T) {
@@ -115,39 +70,6 @@ func TestStdinPeekEmpty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", peekResp.StatusCode)
 	}
 	peekResp.Body.Close()
-}
-
-func TestStdinAcceptNotFound(t *testing.T) {
-	_, ts := newTestServer(t)
-	sid := makeSession(t, ts)
-
-	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin/nonexistent/accept", nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-}
-
-func TestStdinRejectNotFound(t *testing.T) {
-	_, ts := newTestServer(t)
-	sid := makeSession(t, ts)
-
-	resp := postJSON(t, ts, "/sessions/"+sid+"/stdin/nonexistent/reject", nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-}
-
-func TestStdinStatusNotFound(t *testing.T) {
-	_, ts := newTestServer(t)
-	sid := makeSession(t, ts)
-
-	resp := getJSON(t, ts, "/sessions/"+sid+"/stdin/nonexistent/status")
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
 }
 
 func TestStdinRejectAllSessionNotFound(t *testing.T) {
@@ -173,8 +95,6 @@ func TestStdinEnqueueInvalidBase64(t *testing.T) {
 	resp.Body.Close()
 }
 
-// --- Session error cases ---
-
 func TestGetSessionNotFound(t *testing.T) {
 	_, ts := newTestServer(t)
 
@@ -188,7 +108,6 @@ func TestGetSessionNotFound(t *testing.T) {
 func TestCreateSessionBadRequest(t *testing.T) {
 	_, ts := newTestServer(t)
 
-	// Empty command slice should be rejected.
 	resp := postJSON(t, ts, "/sessions", AppendOutputRequest{Stream: "oops!"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)

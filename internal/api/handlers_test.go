@@ -229,7 +229,6 @@ func TestStdinEnqueueAndPeek(t *testing.T) {
 	decodeJSON(t, resp, &created)
 	sid := created.ID
 
-	// Enqueue stdin.
 	stdinData := base64.StdEncoding.EncodeToString([]byte("ls -la\n"))
 	enqResp := postJSON(t, ts, "/sessions/"+sid+"/stdin?client_id=test-client", StdinRequest{
 		Data: stdinData,
@@ -239,14 +238,10 @@ func TestStdinEnqueueAndPeek(t *testing.T) {
 	}
 	var entry StdinResponse
 	decodeJSON(t, enqResp, &entry)
-	if entry.ID == "" {
-		t.Error("expected non-empty entry ID")
-	}
-	if entry.Status != "pending" {
-		t.Errorf("expected pending status, got %q", entry.Status)
+	if entry.ID == 0 {
+		t.Error("expected non-zero entry ID")
 	}
 
-	// Peek.
 	peekResp := getJSON(t, ts, "/sessions/"+sid+"/stdin")
 	if peekResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", peekResp.StatusCode)
@@ -254,6 +249,6 @@ func TestStdinEnqueueAndPeek(t *testing.T) {
 	var peeked StdinResponse
 	decodeJSON(t, peekResp, &peeked)
 	if peeked.ID != entry.ID {
-		t.Errorf("peek returned wrong ID: %s vs %s", peeked.ID, entry.ID)
+		t.Errorf("peek returned wrong ID: %d vs %d", peeked.ID, entry.ID)
 	}
 }
