@@ -85,3 +85,17 @@ type StdinStatusResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// RegisterClientRequest is the body for POST /sessions/{id}/clients.
+type RegisterClientRequest struct{}
+
+// RegisterClientResponse is returned by POST /sessions/{id}/clients.
+type RegisterClientResponse struct {
+	ClientID string `json:"client_id"`
+	Status   string `json:"status"`
+}
+
+// ApproveClientRequest is the body for POST /sessions/{id}/clients/{cid}/approve.
+type ApproveClientRequest struct {
+	Permission string `json:"permission,omitempty"`
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/session"
+	"github.com/google/uuid"
 )
 
 var handlerCh = alog.UseChannel("HANDLER")
@@ -57,91 +58,210 @@ func (s *Server) registerRoutes() {
 	mux.HandleFunc("GET /ws", s.handleWebSocket)
 
 	// Session CRUD
-	mux.HandleFunc("POST /sessions", s.handleCreateSession)
-	mux.HandleFunc("GET /sessions", s.handleListSessions)
-	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
-	mux.HandleFunc("DELETE /sessions/{id}", s.handleDeleteSession)
-	mux.HandleFunc("PATCH /sessions/{id}", s.handlePatchSession)
+	mux.HandleFunc("POST /sessions", s.handleCreateSessionRoute)
+	mux.HandleFunc("GET /sessions", s.handleListSessionsRoute)
+	mux.HandleFunc("GET /sessions/{id}", s.handleGetSessionRoute)
+	mux.HandleFunc("DELETE /sessions/{id}", s.handleDeleteSessionRoute)
+	mux.HandleFunc("PATCH /sessions/{id}", s.handlePatchSessionRoute)
 
 	// I/O
-	mux.HandleFunc("POST /sessions/{id}/output", s.handleAppendOutput)
-	mux.HandleFunc("GET /sessions/{id}/output", s.handlePollOutput)
+	mux.HandleFunc("POST /sessions/{id}/output", s.handleAppendOutputRoute)
+	mux.HandleFunc("GET /sessions/{id}/output", s.handlePollOutputRoute)
 
 	// STDIN
-	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdin)
-	mux.HandleFunc("GET /sessions/{id}/stdin", s.handlePeekStdin)
-	mux.HandleFunc("POST /sessions/{id}/stdin/ack", s.handleAckStdin)
+	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdinRoute)
+	mux.HandleFunc("GET /sessions/{id}/stdin", s.handlePeekStdinRoute)
+	mux.HandleFunc("POST /sessions/{id}/stdin/ack", s.handleAckStdinRoute)
 
-	// Approval (Phase 7)
-	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClient)
-	mux.HandleFunc("GET /sessions/{id}/clients", s.handleListClients)
-	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/approve", s.handleApproveClient)
-	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/deny", s.handleDenyClient)
+	// Approval
+	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClientRoute)
+	mux.HandleFunc("GET /sessions/{id}/clients", s.handleListClientsRoute)
+	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/approve", s.handleApproveClientRoute)
+	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/deny", s.handleDenyClientRoute)
 }
 
-/* --- Session CRUD --------------------------------------------------------- */
+/* --- Routes --------------------------------------------------------------- */
 
-func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleCreateSessionRoute(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
 		return
 	}
+	status, resp := s.handleCreateSession(req)
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleListSessionsRoute(w http.ResponseWriter, r *http.Request) {
+	status, resp := s.handleListSessions()
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleGetSessionRoute(w http.ResponseWriter, r *http.Request) {
+	status, resp := s.handleGetSession(r.PathValue("id"))
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleDeleteSessionRoute(w http.ResponseWriter, r *http.Request) {
+	if status, resp := s.handleDeleteSession(r.PathValue("id")); nil != resp {
+		writeJSON(w, status, resp)
+	} else {
+		w.WriteHeader(status)
+	}
+}
+
+func (s *Server) handlePatchSessionRoute(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req PatchSessionRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		return
+	}
+
+	status, resp := s.handlePatchSession(id, req)
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleAppendOutputRoute(w http.ResponseWriter, r *http.Request) {
+
+	var req AppendOutputRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+	}
+
+	if status, resp := s.handleAppendOutput(r.PathValue("id"), req); nil != resp {
+		writeJSON(w, status, resp)
+	} else {
+		w.WriteHeader(status)
+	}
+}
+
+func (s *Server) handlePollOutputRoute(w http.ResponseWriter, r *http.Request) {
+	stdoutOffset, _ := strconv.ParseInt(r.URL.Query().Get("stdout_offset"), 10, 64)
+	stderrOffset, _ := strconv.ParseInt(r.URL.Query().Get("stderr_offset"), 10, 64)
+	status, resp := s.handlePollOutput(r.PathValue("id"), r.URL.Query().Get("client_id"), stdoutOffset, stderrOffset)
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	clientID := r.URL.Query().Get("client_id")
+
+	var req StdinRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		return
+	}
+
+	status, resp := s.handleEnqueueStdin(id, clientID, req)
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handlePeekStdinRoute(w http.ResponseWriter, r *http.Request) {
+	status, resp := s.handlePeekStdin(r.PathValue("id"))
+	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleAckStdinRoute(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req AckStdinRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
+		return
+	}
+	if status, resp := s.handleAckStdin(id, req); nil == resp {
+		w.WriteHeader(status)
+	} else {
+		writeJSON(w, status, resp)
+	}
+}
+
+// handleRegisterClient handles POST /sessions/{id}/clients.
+// Server generates a unique client ID and returns it to the client.
+func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Request) {
+	status, resp := s.handleRegisterClient(r.PathValue("id"))
+	writeJSON(w, status, resp)
+}
+
+// handleListClients handles GET /sessions/{id}/clients.
+// Supports ?status=pending to filter to pending clients.
+func (s *Server) handleListClientsRoute(w http.ResponseWriter, r *http.Request) {
+	status, resp := s.handleListClients(r.PathValue("id"), r.URL.Query().Get("status"))
+	writeJSON(w, status, resp)
+}
+
+// handleApproveClient handles POST /sessions/{id}/clients/{cid}/approve.
+func (s *Server) handleApproveClientRoute(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cid := r.PathValue("cid")
+
+	var req ApproveClientRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		return
+	}
+
+	if status, resp := s.handleApproveClient(id, cid, req); nil == resp {
+		w.WriteHeader(status)
+	} else {
+		writeJSON(w, status, resp)
+	}
+}
+
+// handleDenyClient handles POST /sessions/{id}/clients/{cid}/deny.
+func (s *Server) handleDenyClientRoute(w http.ResponseWriter, r *http.Request) {
+	if status, resp := s.handleDenyClient(r.PathValue("id"), r.PathValue("cid")); nil == resp {
+		w.WriteHeader(status)
+	} else {
+		writeJSON(w, status, resp)
+	}
+}
+
+/* --- Session CRUD --------------------------------------------------------- */
+
+func (s *Server) handleCreateSession(req CreateSessionRequest) (int, interface{}) {
 	var inputId *string = nil
 	if req.ID != "" {
 		inputId = &req.ID
 	}
 	sess, err := s.store.Create(inputId)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
-	writeJSON(w, http.StatusCreated, sessionToResponse(sess))
+	return http.StatusCreated, sessionToResponse(sess)
 }
 
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListSessions() (int, interface{}) {
 	sessions, err := s.store.List()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusInternalServerError, ErrorResponse{Error: err.Error()}
 	}
 	resp := make([]SessionResponse, 0, len(sessions))
 	for _, sess := range sessions {
 		resp = append(resp, sessionToResponse(sess))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return http.StatusOK, resp
 }
 
-func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handleGetSession(id string) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
-	writeJSON(w, http.StatusOK, sessionToResponse(sess))
+	return http.StatusOK, sessionToResponse(sess)
 }
 
-func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handleDeleteSession(id string) (int, interface{}) {
 	if err := s.store.Delete(id); err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	return http.StatusNoContent, nil
 }
 
-func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handlePatchSession(id string, req PatchSessionRequest) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
-	}
-	var req PatchSessionRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
 	sess.Complete(req.ExitCode)
 
@@ -152,13 +272,12 @@ func (s *Server) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		handlerCh.Log(alog.DEBUG, "[remote-control] deleted completed session: %s", id)
 	}
 
-	writeJSON(w, http.StatusOK, sessionToResponse(sess))
+	return http.StatusOK, sessionToResponse(sess)
 }
 
 /* --- Output --------------------------------------------------------------- */
 
-func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handleAppendOutput(id string, req AppendOutputRequest) (int, interface{}) {
 	handlerCh.Log(alog.DEBUG2, "Appending output for session %s", id)
 	sess, err := s.store.Get(id)
 
@@ -169,25 +288,17 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		handlerCh.Log(alog.DEBUG, "Recreating unknown session %s", id)
 		sess, err = s.store.Create(&id)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "Unable to recreate session"})
-			return
+			return http.StatusInternalServerError, ErrorResponse{Error: "Unable to recreate session"}
 		}
 		respSuccess = http.StatusCreated
 	}
 
-	var req AppendOutputRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
-		return
-	}
 	stream, data, ts, err := req.decode()
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusBadRequest, ErrorResponse{Error: err.Error()}
 	}
 	if stream != session.StreamStdout && stream != session.StreamStderr {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "stream must be 'stdout' or 'stderr'"})
-		return
+		return http.StatusBadRequest, ErrorResponse{Error: "stream must be 'stdout' or 'stderr'"}
 	}
 
 	// Get offset before appending
@@ -195,6 +306,7 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 	sess.AppendOutput(stream, data, ts)
 
 	// Broadcast to WebSocket subscribers
+	//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	if s.connMgr != nil {
 		payload := OutputChunkPayload{
 			Stream:    string(stream),
@@ -225,33 +337,24 @@ func (s *Server) handleAppendOutput(w http.ResponseWriter, r *http.Request) {
 		handlerCh.Log(alog.DEBUG, "[remote-control] purged output chunks: stdout=%d, stderr=%d", purgedStdout, purgedStderr)
 	}
 
-	w.WriteHeader(respSuccess)
+	return respSuccess, nil
 }
 
-func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handlePollOutput(id, clientID string, stdoutOffset, stderrOffset int64) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
-
-	// Extract client_id from query parameter (required for clients, optional for host)
-	clientID := r.URL.Query().Get("client_id")
 
 	// If client_id is provided, enforce approval and track activity
 	if clientID != "" {
 		// Enforce client approval for output polling
 		if s.cfg.RequireApproval {
 			if !s.checkClientApproval(sess, clientID, false) {
-				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved"})
-				return
+				return http.StatusForbidden, ErrorResponse{Error: "not approved"}
 			}
 		}
 	}
-
-	stdoutOffset, _ := strconv.ParseInt(r.URL.Query().Get("stdout_offset"), 10, 64)
-	stderrOffset, _ := strconv.ParseInt(r.URL.Query().Get("stderr_offset"), 10, 64)
 
 	// Update client activity if client_id is provided
 	if clientID != "" {
@@ -308,25 +411,21 @@ func (s *Server) handlePollOutput(w http.ResponseWriter, r *http.Request) {
 		nextStderr = last.Offset + int64(len(last.Data))
 	}
 
-	writeJSON(w, http.StatusOK, PollOutputResponse{
+	return http.StatusOK, PollOutputResponse{
 		Chunks:        chunks,
 		NextOffsets:   map[string]int64{"stdout": nextStdout, "stderr": nextStderr},
 		ActualOffsets: map[string]int64{"stdout": actualStdoutOffset, "stderr": actualStderrOffset},
-	})
+	}
 }
 
 /* --- STDIN ---------------------------------------------------------------- */
 
-func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	// Extract client_id from query parameter (optional, for client submissions)
-	clientID := r.URL.Query().Get("client_id")
+func (s *Server) handleEnqueueStdin(id, clientID string, req StdinRequest) (int, interface{}) {
 	handlerCh.Log(alog.DEBUG3, "Handling stdin from client [%s] for session [%s]", clientID, id)
 
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
 
 	// Determine if this is a host submission (no client_id provided)
@@ -335,61 +434,121 @@ func (s *Server) handleEnqueueStdin(w http.ResponseWriter, r *http.Request) {
 	// Enforce client approval and write permission for non-host submissions
 	if !isHostSubmission && s.cfg.RequireApproval {
 		if clientID == "" {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required for client submissions"})
-			return
+			return http.StatusBadRequest, ErrorResponse{Error: "client_id query parameter is required for client submissions"}
 		}
 		if !s.checkClientApproval(sess, clientID, true) {
-			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "not approved or read-only"})
-			return
+			return http.StatusForbidden, ErrorResponse{Error: "not approved or read-only"}
 		}
 	}
 
-	var req StdinRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
-		return
-	}
 	data, err := base64.StdEncoding.DecodeString(req.Data)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "data must be base64"})
-		return
+		return http.StatusBadRequest, ErrorResponse{Error: "data must be base64"}
 	}
 
 	entry := sess.EnqueueStdin(data)
-	writeJSON(w, http.StatusCreated, stdinEntryToResponse(&entry))
+	return http.StatusCreated, stdinEntryToResponse(&entry)
 }
 
-func (s *Server) handlePeekStdin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handlePeekStdin(id string) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
 	entry := sess.PeekStdin()
 	if entry == nil {
-		writeJSON(w, http.StatusOK, nil)
-		return
+		return http.StatusOK, nil
 	}
-	writeJSON(w, http.StatusOK, stdinEntryToResponse(entry))
+	return http.StatusOK, stdinEntryToResponse(entry)
 }
 
-func (s *Server) handleAckStdin(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	var req AckStdinRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
-		return
-	}
+func (s *Server) handleAckStdin(id string, req AckStdinRequest) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
 	if err := sess.AckStdin(req.ID); err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: err.Error()})
-		return
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return http.StatusNoContent, nil
+}
+
+/* -- Client approvals ------------------------------------------------------ */
+
+// handleRegisterClient handles POST /sessions/{id}/clients.
+// Server generates a unique client ID and returns it to the client.
+func (s *Server) handleRegisterClient(id string) (int, interface{}) {
+	sess, err := s.store.Get(id)
+	if err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+
+	// Server generates the client ID
+	clientID := uuid.New().String()
+	rec := sess.RegisterClient(clientID)
+
+	// If approval is not required, auto-approve with default permission.
+	if !s.cfg.RequireApproval {
+		perm := session.Permission(s.cfg.DefaultPermission)
+		if perm == "" {
+			perm = session.PermissionReadWrite
+		}
+		_ = sess.ApproveClient(clientID, perm)
+		rec.Approval = session.ApprovalApproved
+		rec.Permission = perm
+	}
+
+	return http.StatusOK, map[string]string{
+		"client_id": rec.ClientID,
+		"status":    string(rec.Approval),
+	}
+}
+
+// handleListClients handles GET /sessions/{id}/clients.
+// Supports ?status=pending to filter to pending clients.
+func (s *Server) handleListClients(id, statusFilter string) (int, interface{}) {
+	sess, err := s.store.Get(id)
+	if err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+
+	var clients []*session.ClientRecord
+	if statusFilter == "pending" {
+		clients = sess.ListPendingClients()
+	} else {
+		clients = sess.ListClients()
+	}
+
+	return http.StatusOK, clients
+}
+
+// handleApproveClient handles POST /sessions/{id}/clients/{cid}/approve.
+func (s *Server) handleApproveClient(id, cid string, req ApproveClientRequest) (int, interface{}) {
+	sess, err := s.store.Get(id)
+	if err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+
+	perm := session.Permission(req.Permission)
+	if perm == "" {
+		perm = session.PermissionReadWrite
+	}
+
+	if err := sess.ApproveClient(cid, perm); err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+	return http.StatusNoContent, nil
+}
+
+// handleDenyClient handles POST /sessions/{id}/clients/{cid}/deny.
+func (s *Server) handleDenyClient(id, cid string) (int, interface{}) {
+	sess, err := s.store.Get(id)
+	if err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+	if err := sess.DenyClient(cid); err != nil {
+		return http.StatusNotFound, ErrorResponse{Error: err.Error()}
+	}
+	return http.StatusNoContent, nil
 }
