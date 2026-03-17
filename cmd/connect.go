@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gabe-l-hart/remote-control/internal/client"
-	"github.com/gabe-l-hart/remote-control/internal/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 )
 
 var (

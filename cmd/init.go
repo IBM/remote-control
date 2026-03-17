@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 )
 
 var initCmd = &cobra.Command{

@@ -14,10 +14,10 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
-	"github.com/gabe-l-hart/remote-control/internal/api"
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/session"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/server"
+	"github.com/gabe-l-hart/remote-control/internal/server/session"
 )
 
 var ch = alog.UseChannel("SERVER")
@@ -61,7 +61,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
 	tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
 
-	srv := api.NewServer(serverAddr, store, cfg)
+	srv := server.NewServer(serverAddr, store, cfg)
 	ch.Log(alog.INFO, "[remote-control] server listening on %s", serverAddr)
 
 	// Graceful shutdown on SIGTERM/SIGINT.

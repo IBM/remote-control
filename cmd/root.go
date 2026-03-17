@@ -9,7 +9,7 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/host"
 )
 
