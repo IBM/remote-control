@@ -19,8 +19,8 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 )
 
 var ch = alog.UseChannel("HOST")

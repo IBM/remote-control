@@ -14,9 +14,10 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
 	"golang.org/x/term"
+
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 )
 
 var ch = alog.UseChannel("CLIENT")
