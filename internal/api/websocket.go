@@ -13,6 +13,66 @@ import (
 	"github.com/gabe-l-hart/remote-control/internal/session"
 )
 
+var wsCh = alog.UseChannel("WEBSOC")
+
+/* -- WSConnection ---------------------------------------------------------- */
+
+type WSConnection struct {
+	clientID string
+	conn     *websocket.Conn
+	send     chan []byte
+	sessions map[string]bool // subscribed sessions
+	lastPing time.Time
+	mu       sync.RWMutex
+	done     chan struct{}
+	handlers map[string]HandlerFunc
+}
+
+func (w *WSConnection) RegisterHandler(messageType string, handler HandlerFunc) {
+	w.handlers[messageType] = handler
+}
+
+// Send queues a message to be sent to the client
+func (w *WSConnection) Send(messageType string, message interface{}) error {
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		return nil
+	}
+
+	select {
+	case w.send <- data:
+		return nil
+	case <-w.done:
+		return fmt.Errorf("Connection closed, unable to send")
+	default:
+		// Channel full, drop message
+		return fmt.Errorf("Connection full, unable to send")
+	}
+}
+
+// Poll for WS is a no-op
+func (w *WSConnection) Poll() []interface{} {
+	return make([]interface{}, 0)
+}
+
+// Close closes the connection
+func (w *WSConnection) Close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	select {
+	case <-w.done:
+		// Already closed
+		return
+	default:
+		close(w.done)
+		close(w.send)
+		w.conn.Close()
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 var connMgrCh = alog.UseChannel("CONNM")
 
 // WSMessage is the top-level WebSocket message format
@@ -22,26 +82,6 @@ type WSMessage struct {
 	ClientID  string          `json:"client_id,omitempty"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
 }
-
-// Message type constants
-const (
-	// Server → Client
-	MsgTypeOutputChunk      = "output_chunk"
-	MsgTypeStdinPending     = "stdin_pending"
-	MsgTypeSessionCompleted = "session_completed"
-	MsgTypeClientApproved   = "client_approved"
-	MsgTypeError            = "error"
-	MsgTypePong             = "pong"
-	MsgTypeSubscribed       = "subscribed"
-	MsgTypeUnsubscribed     = "unsubscribed"
-
-	// Client → Server
-	MsgTypeSubscribe   = "subscribe"
-	MsgTypeUnsubscribe = "unsubscribe"
-	MsgTypeStdinSubmit = "stdin_submit"
-	MsgTypeStdinAck    = "stdin_ack"
-	MsgTypePing        = "ping"
-)
 
 // OutputChunkPayload is the payload for output_chunk messages
 type OutputChunkPayload struct {
@@ -71,7 +111,7 @@ type ErrorPayload struct {
 }
 
 // Connection represents a single WebSocket connection
-type Connection struct {
+type Connection_OLD struct {
 	clientID string
 	conn     *websocket.Conn
 	send     chan []byte
@@ -82,8 +122,8 @@ type Connection struct {
 }
 
 // NewConnection creates a new Connection
-func NewConnection(clientID string, conn *websocket.Conn) *Connection {
-	return &Connection{
+func NewConnection(clientID string, conn *websocket.Conn) *Connection_OLD {
+	return &Connection_OLD{
 		clientID: clientID,
 		conn:     conn,
 		send:     make(chan []byte, 256),
@@ -94,42 +134,42 @@ func NewConnection(clientID string, conn *websocket.Conn) *Connection {
 }
 
 // Subscribe adds a session to this connection's subscription list
-func (c *Connection) Subscribe(sessionID string) {
+func (c *Connection_OLD) Subscribe(sessionID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sessions[sessionID] = true
 }
 
 // Unsubscribe removes a session from this connection's subscription list
-func (c *Connection) Unsubscribe(sessionID string) {
+func (c *Connection_OLD) Unsubscribe(sessionID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.sessions, sessionID)
 }
 
 // IsSubscribed checks if this connection is subscribed to a session
-func (c *Connection) IsSubscribed(sessionID string) bool {
+func (c *Connection_OLD) IsSubscribed(sessionID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.sessions[sessionID]
 }
 
 // UpdatePing updates the last ping timestamp
-func (c *Connection) UpdatePing() {
+func (c *Connection_OLD) UpdatePing() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastPing = time.Now()
 }
 
 // LastPing returns the last ping timestamp
-func (c *Connection) LastPing() time.Time {
+func (c *Connection_OLD) LastPing() time.Time {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.lastPing
 }
 
 // Send queues a message to be sent to the client
-func (c *Connection) Send(message []byte) bool {
+func (c *Connection_OLD) Send(message []byte) bool {
 	select {
 	case c.send <- message:
 		return true
@@ -142,7 +182,7 @@ func (c *Connection) Send(message []byte) bool {
 }
 
 // Close closes the connection
-func (c *Connection) Close() {
+func (c *Connection_OLD) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -157,19 +197,19 @@ func (c *Connection) Close() {
 }
 
 // ConnectionManager manages all active WebSocket connections
-type ConnectionManager struct {
+type ConnectionManager_OLD struct {
 	mu          sync.RWMutex
-	connections map[string]*Connection            // clientID -> Connection
-	sessions    map[string]map[string]*Connection // sessionID -> clientID -> Connection
+	connections map[string]*Connection_OLD            // clientID -> Connection
+	sessions    map[string]map[string]*Connection_OLD // sessionID -> clientID -> Connection
 	store       session.Store
 	upgrader    websocket.Upgrader
 }
 
 // NewConnectionManager creates a new ConnectionManager
-func NewConnectionManager(store session.Store) *ConnectionManager {
-	return &ConnectionManager{
-		connections: make(map[string]*Connection),
-		sessions:    make(map[string]map[string]*Connection),
+func NewConnectionManager_OLD(store session.Store) *ConnectionManager_OLD {
+	return &ConnectionManager_OLD{
+		connections: make(map[string]*Connection_OLD),
+		sessions:    make(map[string]map[string]*Connection_OLD),
 		store:       store,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -183,7 +223,7 @@ func NewConnectionManager(store session.Store) *ConnectionManager {
 }
 
 // Register adds a new WebSocket connection
-func (cm *ConnectionManager) Register(clientID string, conn *websocket.Conn) *Connection {
+func (cm *ConnectionManager_OLD) Register(clientID string, conn *websocket.Conn) *Connection_OLD {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -199,7 +239,7 @@ func (cm *ConnectionManager) Register(clientID string, conn *websocket.Conn) *Co
 }
 
 // Unregister removes a WebSocket connection
-func (cm *ConnectionManager) Unregister(clientID string) {
+func (cm *ConnectionManager_OLD) Unregister(clientID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -223,7 +263,7 @@ func (cm *ConnectionManager) Unregister(clientID string) {
 }
 
 // Subscribe adds a connection to a session's subscriber list
-func (cm *ConnectionManager) Subscribe(clientID, sessionID string) error {
+func (cm *ConnectionManager_OLD) Subscribe(clientID, sessionID string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -240,7 +280,7 @@ func (cm *ConnectionManager) Subscribe(clientID, sessionID string) error {
 	connection.Subscribe(sessionID)
 
 	if _, ok := cm.sessions[sessionID]; !ok {
-		cm.sessions[sessionID] = make(map[string]*Connection)
+		cm.sessions[sessionID] = make(map[string]*Connection_OLD)
 	}
 	cm.sessions[sessionID][clientID] = connection
 
@@ -248,7 +288,7 @@ func (cm *ConnectionManager) Subscribe(clientID, sessionID string) error {
 }
 
 // Unsubscribe removes a connection from a session's subscriber list
-func (cm *ConnectionManager) Unsubscribe(clientID, sessionID string) {
+func (cm *ConnectionManager_OLD) Unsubscribe(clientID, sessionID string) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -268,7 +308,7 @@ func (cm *ConnectionManager) Unsubscribe(clientID, sessionID string) {
 }
 
 // Broadcast sends a message to all subscribers of a session
-func (cm *ConnectionManager) Broadcast(sessionID string, msg WSMessage) {
+func (cm *ConnectionManager_OLD) Broadcast(sessionID string, msg WSMessage) {
 	cm.mu.RLock()
 	clients, ok := cm.sessions[sessionID]
 	cm.mu.RUnlock()
@@ -289,7 +329,7 @@ func (cm *ConnectionManager) Broadcast(sessionID string, msg WSMessage) {
 }
 
 // SendToClient sends a message to a specific client
-func (cm *ConnectionManager) SendToClient(clientID string, msg WSMessage) error {
+func (cm *ConnectionManager_OLD) SendToClient(clientID string, msg WSMessage) error {
 	cm.mu.RLock()
 	conn, ok := cm.connections[clientID]
 	cm.mu.RUnlock()
@@ -311,7 +351,7 @@ func (cm *ConnectionManager) SendToClient(clientID string, msg WSMessage) error 
 }
 
 // Heartbeat checks connection health and removes stale connections
-func (cm *ConnectionManager) Heartbeat(timeout time.Duration) {
+func (cm *ConnectionManager_OLD) Heartbeat(timeout time.Duration) {
 	cm.mu.RLock()
 	staleClients := make([]string, 0)
 	now := time.Now()
@@ -329,7 +369,7 @@ func (cm *ConnectionManager) Heartbeat(timeout time.Duration) {
 }
 
 // GetConnection returns a connection by client ID
-func (cm *ConnectionManager) GetConnection(clientID string) (*Connection, bool) {
+func (cm *ConnectionManager_OLD) GetConnection(clientID string) (*Connection_OLD, bool) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	conn, ok := cm.connections[clientID]
@@ -337,7 +377,7 @@ func (cm *ConnectionManager) GetConnection(clientID string) (*Connection, bool) 
 }
 
 // ConnectionCount returns the number of active connections
-func (cm *ConnectionManager) ConnectionCount() int {
+func (cm *ConnectionManager_OLD) ConnectionCount() int {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	return len(cm.connections)
