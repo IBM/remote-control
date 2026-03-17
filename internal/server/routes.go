@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // handlers wires all HTTP routes onto mux.
@@ -11,7 +13,7 @@ func (s *Server) registerRoutes() {
 	mux := s.mux
 
 	// WebSocket
-	mux.HandleFunc("GET /ws", s.handleWebSocket)
+	mux.HandleFunc("GET /ws/{id}", s.handleWebSocket)
 
 	// Session CRUD
 	mux.HandleFunc("POST /sessions", s.handleCreateSessionRoute)
@@ -23,11 +25,7 @@ func (s *Server) registerRoutes() {
 	// I/O
 	mux.HandleFunc("POST /sessions/{id}/output", s.handleAppendOutputRoute)
 	mux.HandleFunc("GET /sessions/{id}/output", s.handlePollOutputRoute)
-
-	// STDIN
 	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdinRoute)
-	mux.HandleFunc("GET /sessions/{id}/stdin", s.handlePeekStdinRoute)
-	mux.HandleFunc("POST /sessions/{id}/stdin/ack", s.handleAckStdinRoute)
 
 	// Approval
 	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClientRoute)
@@ -39,12 +37,12 @@ func (s *Server) registerRoutes() {
 /* --- Routes --------------------------------------------------------------- */
 
 func (s *Server) handleCreateSessionRoute(w http.ResponseWriter, r *http.Request) {
-	var req CreateSessionRequest
+	var req types.CreateSessionRequest
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid json"})
 		return
 	}
-	status, resp := s.handleCreateSession(req)
+	status, resp := s.handleCreateSession(req, nil)
 	writeJSON(w, status, resp)
 }
 
@@ -68,9 +66,9 @@ func (s *Server) handleDeleteSessionRoute(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handlePatchSessionRoute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var req PatchSessionRequest
+	var req types.PatchSessionRequest
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 		return
 	}
 
@@ -80,12 +78,12 @@ func (s *Server) handlePatchSessionRoute(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAppendOutputRoute(w http.ResponseWriter, r *http.Request) {
 
-	var req AppendOutputRequest
+	var req types.AppendOutputRequest
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 	}
 
-	if status, resp := s.handleAppendOutput(r.PathValue("id"), req); nil != resp {
+	if status, resp := s.handleAppendOutput(r.PathValue("id"), req, nil); nil != resp {
 		writeJSON(w, status, resp)
 	} else {
 		w.WriteHeader(status)
@@ -103,9 +101,9 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 	id := r.PathValue("id")
 	clientID := r.URL.Query().Get("client_id")
 
-	var req StdinRequest
+	var req types.StdinRequest
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 		return
 	}
 
@@ -113,29 +111,10 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, status, resp)
 }
 
-func (s *Server) handlePeekStdinRoute(w http.ResponseWriter, r *http.Request) {
-	status, resp := s.handlePeekStdin(r.PathValue("id"))
-	writeJSON(w, status, resp)
-}
-
-func (s *Server) handleAckStdinRoute(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	var req AckStdinRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
-		return
-	}
-	if status, resp := s.handleAckStdin(id, req); nil == resp {
-		w.WriteHeader(status)
-	} else {
-		writeJSON(w, status, resp)
-	}
-}
-
 // handleRegisterClient handles POST /sessions/{id}/clients.
 // Server generates a unique client ID and returns it to the client.
 func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Request) {
-	status, resp := s.handleRegisterClient(r.PathValue("id"))
+	status, resp := s.handleRegisterClient(r.PathValue("id"), nil)
 	writeJSON(w, status, resp)
 }
 
@@ -151,9 +130,9 @@ func (s *Server) handleApproveClientRoute(w http.ResponseWriter, r *http.Request
 	id := r.PathValue("id")
 	cid := r.PathValue("cid")
 
-	var req ApproveClientRequest
+	var req types.ApproveClientRequest
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid body"})
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 		return
 	}
 

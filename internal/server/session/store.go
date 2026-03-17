@@ -5,63 +5,44 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
-// StoreOptions holds optional configuration for a Store implementation.
-// Future fields: DSN for SQL backends, path for file-backed store, etc.
-type StoreOptions struct{}
-
-// Store is the interface for session persistence.
-type Store interface {
-	// Create creates a new session with the input ID. ID is created if nil.
-	Create(id *string) (*Session, error)
-	// Get returns the session with the given ID.
-	Get(id string) (*Session, error)
-	// List returns all sessions.
-	List() ([]*Session, error)
-	// Delete removes the session with the given ID.
-	Delete(id string) error
+// Store is an in-memory implementation of Store.
+type Store struct {
+	mu              sync.RWMutex
+	sessions        map[string]*Session
+	maxOutputBuffer int
 }
 
 // NewStore creates a Store of the requested type.
-// storeType "memory" → MemoryStore; future: "sqlite", "postgres", etc.
-func NewStore(storeType string, opts StoreOptions) (Store, error) {
-	switch storeType {
-	case "memory":
-		return &MemoryStore{
-			sessions: make(map[string]*Session),
-		}, nil
-	default:
-		return nil, fmt.Errorf("unknown store type: %q", storeType)
+func NewStore(maxOutputBuffer int) *Store {
+	return &Store{
+		sessions:        make(map[string]*Session),
+		maxOutputBuffer: maxOutputBuffer,
 	}
 }
 
-// MemoryStore is an in-memory implementation of Store.
-type MemoryStore struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-}
-
 // Create creates a new session and stores it in memory.
-func (m *MemoryStore) Create(id *string) (*Session, error) {
+func (s *Store) Create(id *string, conn *websocket.Conn) (*Session, error) {
 	if nil == id {
 		newId := uuid.New().String()
 		id = &newId
 	}
-	sess := newSession(*id)
+	sess := newSession(*id, s.maxOutputBuffer, conn)
 
-	m.mu.Lock()
-	m.sessions[*id] = sess
-	m.mu.Unlock()
+	s.mu.Lock()
+	s.sessions[*id] = sess
+	s.mu.Unlock()
 
 	return sess, nil
 }
 
 // Get returns the session with the given ID, or an error if not found.
-func (m *MemoryStore) Get(id string) (*Session, error) {
-	m.mu.RLock()
-	sess, ok := m.sessions[id]
-	m.mu.RUnlock()
+func (s *Store) Get(id string) (*Session, error) {
+	s.mu.RLock()
+	sess, ok := s.sessions[id]
+	s.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("session not found: %s", id)
@@ -70,25 +51,25 @@ func (m *MemoryStore) Get(id string) (*Session, error) {
 }
 
 // List returns all sessions in the store.
-func (m *MemoryStore) List() ([]*Session, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *Store) List() ([]*Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	result := make([]*Session, 0, len(m.sessions))
-	for _, sess := range m.sessions {
+	result := make([]*Session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
 		result = append(result, sess)
 	}
 	return result, nil
 }
 
 // Delete removes the session with the given ID.
-func (m *MemoryStore) Delete(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if _, ok := m.sessions[id]; !ok {
+	if _, ok := s.sessions[id]; !ok {
 		return fmt.Errorf("session not found: %s", id)
 	}
-	delete(m.sessions, id)
+	delete(s.sessions, id)
 	return nil
 }

@@ -1,56 +1,97 @@
 package session
 
 import (
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 var sessCh = alog.UseChannel("SESSION")
 
+type SessionClient struct {
+	Info types.ClientInfo
+
+	mu          sync.RWMutex
+	conn        *Connection
+	outputQueue []*types.OutputChunk
+}
+
+// Queue an output chunk and if possible send it to the client
+func (c *SessionClient) SendOutout(chunk *types.OutputChunk) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Add to the outputQueue
+	c.outputQueue = append(c.outputQueue, chunk)
+
+	// Attempt to send to the connection and clear the queue if successful
+	if nil == c.conn.SendOutput(c.outputQueue) {
+		c.outputQueue = make([]*types.OutputChunk, 0)
+	}
+}
+
+// Get all chunks off the queue and remove them
+func (c *SessionClient) PopAllQueue() []*types.OutputChunk {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	chunks := c.outputQueue
+	c.outputQueue = make([]*types.OutputChunk, 0)
+	return chunks
+}
+
+// Close the underlying connection
+func (c *SessionClient) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conn.Close()
+}
+
+/* -- Session --------------------------------------------------------------- */
+
 // Session holds all state for a single remote-control session.
 type Session struct {
-	ID     string `json:"id"`
-	Status Status `json:"status"`
-
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	ExitCode    *int       `json:"exit_code,omitempty"`
+	Info types.SessionInfo
 
 	mu sync.RWMutex
 
-	// Output buffers indexed by stream.
-	stdoutChunks []OutputChunk
-	stderrChunks []OutputChunk
+	// buffer for output chunks held for new clients that join
+	outputBuffer    []*types.OutputChunk
+	maxOutputBuffer int
 
-	// stdoutOffset and stderrOffset track total bytes appended for each stream.
-	stdoutOffset int64
-	stderrOffset int64
+	// stdin is the ordered queue of all pending stdin entries
+	stdin []*types.StdinEntry
 
-	// stdin is the ordered queue of all stdin entries (including history).
-	stdin       []*StdinEntry
-	stdinNextId uint64
+	// host connection
+	hostConn *Connection
 
-	// Approval state (populated in Phase 7).
-	clients map[string]*ClientRecord
+	// client connections
+	clients map[string]*SessionClient
 }
 
-func newSession(id string) *Session {
+func newSession(id string, maxOutputBuffer int, hostConn *websocket.Conn) *Session {
 	return &Session{
-		ID:          id,
-		Status:      StatusActive,
-		CreatedAt:   time.Now(),
-		clients:     make(map[string]*ClientRecord),
-		stdinNextId: 1,
+		Info: types.SessionInfo{
+			ID:        id,
+			Status:    types.SessionStatusActive,
+			CreatedAt: time.Now(),
+		},
+		outputBuffer:    make([]*types.OutputChunk, 0),
+		maxOutputBuffer: maxOutputBuffer,
+		stdin:           make([]*types.StdinEntry, 0),
+		hostConn:        newConnection(hostConn),
+		clients:         make(map[string]*SessionClient),
 	}
 }
 
 // AppendOutput adds a new chunk to the specified stream's buffer.
 // The chunk's Offset is set to the current total bytes for that stream.
 // timestamp is provided by the caller (host-grounded).
-func (s *Session) AppendOutput(stream Stream, data []byte, timestamp time.Time) {
+func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 	if len(data) == 0 {
 		return
 	}
@@ -58,139 +99,48 @@ func (s *Session) AppendOutput(stream Stream, data []byte, timestamp time.Time) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	chunk := OutputChunk{
-		Stream:    stream,
-		Data:      make([]byte, len(data)),
-		Timestamp: timestamp,
+	// Create the output chunk
+	chunk := types.OutputChunk{
+		Stream: stream,
+		Data:   make([]byte, len(data)),
 	}
 	copy(chunk.Data, data)
 
-	switch stream {
-	case StreamStdout:
-		chunk.Offset = s.stdoutOffset
-		s.stdoutOffset += int64(len(data))
-		s.stdoutChunks = append(s.stdoutChunks, chunk)
-	case StreamStderr:
-		chunk.Offset = s.stderrOffset
-		s.stderrOffset += int64(len(data))
-		s.stderrChunks = append(s.stderrChunks, chunk)
-	}
-}
-
-// ReadOutput returns all chunks for the given stream starting at fromOffset.
-// If fromOffset is before the earliest available chunk (due to purging), it adjusts
-// to start from the earliest available offset.
-// Returns the chunks and the actual starting offset used.
-func (s *Session) ReadOutput(stream Stream, fromOffset int64) ([]OutputChunk, int64) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var chunks []OutputChunk
-	var currentOffset int64
-	switch stream {
-	case StreamStdout:
-		chunks = s.stdoutChunks
-		currentOffset = s.stdoutOffset
-	case StreamStderr:
-		chunks = s.stderrChunks
-		currentOffset = s.stderrOffset
-	}
-
-	// Determine the earliest available offset
-	var earliestOffset int64
-	if len(chunks) > 0 {
-		earliestOffset = chunks[0].Offset
-	} else {
-		earliestOffset = currentOffset
-	}
-
-	// Adjust fromOffset if it's before the earliest available data
-	actualOffset := fromOffset
-	if fromOffset < earliestOffset {
-		actualOffset = earliestOffset
-	}
-
-	// Find the first chunk whose Offset + len(Data) > actualOffset.
-	// We may need to slice the first chunk if actualOffset falls within it.
-	result := make([]OutputChunk, 0, len(chunks))
-	for _, ch := range chunks {
-		chunkEnd := ch.Offset + int64(len(ch.Data))
-		if chunkEnd <= actualOffset {
-			continue
-		}
-		if ch.Offset >= actualOffset {
-			// Whole chunk is after actualOffset.
-			result = append(result, ch)
-		} else {
-			// Partial chunk: trim the leading bytes already seen.
-			skip := actualOffset - ch.Offset
-			trimmed := OutputChunk{
-				Stream:    ch.Stream,
-				Data:      make([]byte, int64(len(ch.Data))-skip),
-				Timestamp: ch.Timestamp,
-				Offset:    actualOffset,
-			}
-			copy(trimmed.Data, ch.Data[skip:])
-			result = append(result, trimmed)
+	// Send the chunk to all clients
+	// NOTE: No need to send to host since output always comes from host
+	var wg sync.WaitGroup
+	for clientID, client := range s.clients {
+		if client.Info.Approval == types.ApprovalApproved {
+			sessCh.Log(alog.DEBUG4, "Sending chunk to %s", clientID)
+			wg.Add(1)
+			go func() {
+				client.SendOutout(&chunk)
+			}()
 		}
 	}
-	return result, actualOffset
-}
+	wg.Wait()
 
-// StreamOffset returns the total bytes written to the given stream.
-func (s *Session) StreamOffset(stream Stream) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	switch stream {
-	case StreamStdout:
-		return s.stdoutOffset
-	case StreamStderr:
-		return s.stderrOffset
+	// Add to the outputBuffer and truncate if needed
+	s.outputBuffer = append(s.outputBuffer, &chunk)
+	if s.maxOutputBuffer > 0 && len(s.outputBuffer) > s.maxOutputBuffer {
+		trimLen := len(s.outputBuffer) - s.maxOutputBuffer
+		sessCh.Log(alog.DEBUG3, "Trimming %d chunks from output buffer", trimLen)
+		s.outputBuffer = s.outputBuffer[trimLen:]
 	}
-	return 0
 }
 
 // EnqueueStdin appends a new stdin entry to the session's STDIN queue.
-func (s *Session) EnqueueStdin(data []byte) StdinEntry {
+func (s *Session) EnqueueStdin(data []byte) types.StdinEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry := StdinEntry{
-		ID:   s.stdinNextId,
+	entry := types.StdinEntry{
 		Data: data,
 	}
-	s.stdinNextId++
 	s.stdin = append(s.stdin, &entry)
+
+	// TODO: Send directly to the host on websocket so host doesn't need to poll
+
 	return entry
-}
-
-// PeekStdin returns the oldest pending stdin entry without removing it.
-// Returns nil if no pending entries exist.
-func (s *Session) PeekStdin() *StdinEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	sessCh.Log(alog.DEBUG4, "Peeking stdin (%d entries)", len(s.stdin))
-	if len(s.stdin) == 0 {
-		return nil
-	}
-	cp := *s.stdin[0]
-	return &cp
-}
-
-// AckStdin removes the identified entry from stdin.
-func (s *Session) AckStdin(id uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sessCh.Log(alog.DEBUG2, "Ack'ing stdin %d (%d entries)", id, len(s.stdin))
-	for idx, e := range s.stdin {
-		sessCh.Log(alog.DEBUG4, "Checking entry with id %d", e.ID)
-		if e.ID == id {
-			copy(s.stdin[idx:], s.stdin[idx+1:])
-			s.stdin = s.stdin[:len(s.stdin)-1]
-			sessCh.Log(alog.DEBUG3, "Removed entry %d. Remaining entries: %d", e.ID, len(s.stdin))
-			return nil
-		}
-	}
-	return errNotFound(strconv.FormatUint(id, 10))
 }
 
 // Complete marks the session as completed with the given exit code.
@@ -198,128 +148,119 @@ func (s *Session) Complete(exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	s.Status = StatusCompleted
-	s.CompletedAt = &now
-	s.ExitCode = &exitCode
+	s.Info.Status = types.SessionStatusCompleted
+	s.Info.CompletedAt = &now
+	s.Info.ExitCode = &exitCode
 }
 
-// GetStatus returns the current session status (safe for concurrent use).
-func (s *Session) GetStatus() Status {
+// RegisterClient adds a new client to the session in pending state.
+func (s *Session) RegisterClient(conn *websocket.Conn) (string, *SessionClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	clientID := uuid.New().String()
+	client := &SessionClient{
+		Info: types.ClientInfo{
+			ClientID:   clientID,
+			JoinedAt:   now,
+			Approval:   types.ApprovalPending,
+			LastPollAt: now,
+		},
+		conn:        newConnection(conn),
+		outputQueue: make([]*types.OutputChunk, 0),
+	}
+	s.clients[clientID] = client
+	return clientID, client
+}
+
+// GetClient gets the client if available
+func (s *Session) GetClient(clientID string) *SessionClient {
+	if client, ok := s.clients[clientID]; ok {
+		return client
+	}
+	return nil
+}
+
+// ApproveClient approves a client with the given permission level.
+func (s *Session) ApproveClient(clientID string, perm types.Permission) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.clients[clientID]
+	if !ok {
+		return errNotFound(clientID)
+	}
+	rec.Info.Approval = types.ApprovalApproved
+	rec.Info.Permission = perm
+	return nil
+}
+
+// DenyClient denies a client.
+func (s *Session) DenyClient(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.clients[clientID]
+	if !ok {
+		return errNotFound(clientID)
+	}
+	rec.Info.Approval = types.ApprovalDenied
+	return nil
+}
+
+// ListPendingClients returns all clients in pending approval state.
+func (s *Session) ListPendingClients() []*types.ClientInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.Status
-}
-
-// purgeOldChunks removes the oldest chunks from the slice to keep total bytes under maxBytes.
-// Returns the number of chunks purged.
-func (s *Session) purgeOldChunks(chunks *[]OutputChunk, currentOffset int64, maxBytes int64) int {
-	if len(*chunks) == 0 {
-		return 0
-	}
-
-	// Calculate total bytes in buffer
-	var totalBytes int64
-	for _, chunk := range *chunks {
-		totalBytes += int64(len(chunk.Data))
-	}
-
-	// If under limit, keep everything
-	if totalBytes <= maxBytes {
-		return 0
-	}
-
-	// Find the cutoff point: keep chunks from this index onward
-	var keptBytes int64
-	cutoffIndex := len(*chunks)
-
-	// Walk backwards from the end, accumulating bytes
-	for i := len(*chunks) - 1; i >= 0; i-- {
-		chunkSize := int64(len((*chunks)[i].Data))
-		if keptBytes+chunkSize > maxBytes {
-			// This chunk would exceed the limit
-			cutoffIndex = i + 1
-			break
+	var result []*types.ClientInfo
+	for _, rec := range s.clients {
+		if rec.Info.Approval == types.ApprovalPending {
+			cp := rec.Info
+			result = append(result, &cp)
 		}
-		keptBytes += chunkSize
 	}
-
-	// If we need to purge everything (even the last chunk exceeds limit), keep at least the last chunk
-	if cutoffIndex >= len(*chunks) {
-		cutoffIndex = len(*chunks) - 1
-	}
-
-	purged := cutoffIndex
-	if purged > 0 {
-		*chunks = (*chunks)[cutoffIndex:]
-	}
-
-	return purged
+	return result
 }
 
-// PurgeConsumedOutput removes OutputChunks that all active approved clients have consumed.
-// If maxInitialBufferBytes > 0 and no approved clients exist, keeps the most recent chunks
-// up to that byte limit to preserve TUI state for late-joining clients.
-// Returns the number of chunks purged for stdout and stderr.
-func (s *Session) PurgeConsumedOutput(maxInitialBufferBytes int64) (purgedStdout, purgedStderr int) {
+// ListClients returns all client records.
+func (s *Session) ListClients() []*types.ClientInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]*types.ClientInfo, 0, len(s.clients))
+	for _, rec := range s.clients {
+		cp := rec.Info
+		result = append(result, &cp)
+	}
+	return result
+}
+
+// UpdateClientActivity updates the last poll timestamp for a client.
+func (s *Session) UpdateClientActivity(clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.clients[clientID]
+	if !ok {
+		// TODO: Auto re-register this client. Needs the ws connection!
+		return errNotFound(clientID)
+	}
+	rec.Info.LastPollAt = time.Now()
+	return nil
+}
+
+// RemoveInactiveClients removes clients that haven't polled within the timeout
+// period. Returns the list of removed client IDs.
+func (s *Session) RemoveInactiveClients(timeout time.Duration) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Find minimum offset across all active approved clients
-	var minStdoutOffset, minStderrOffset int64 = -1, -1
+	now := time.Now()
+	var removed []string
 
-	for _, client := range s.clients {
-		// Only consider approved clients
-		if client.Approval != ApprovalApproved {
-			continue
-		}
-
-		if minStdoutOffset == -1 || client.StdoutOffset < minStdoutOffset {
-			minStdoutOffset = client.StdoutOffset
-		}
-		if minStderrOffset == -1 || client.StderrOffset < minStderrOffset {
-			minStderrOffset = client.StderrOffset
+	for clientID, client := range s.clients {
+		if now.Sub(client.Info.LastPollAt) > timeout {
+			client.Close()
+			delete(s.clients, clientID)
+			removed = append(removed, clientID)
 		}
 	}
 
-	// If no approved clients, purge old chunks beyond the buffer limit
-	if minStdoutOffset == -1 {
-		if maxInitialBufferBytes > 0 {
-			// Keep most recent chunks up to maxInitialBufferBytes
-			purgedStdout = s.purgeOldChunks(&s.stdoutChunks, s.stdoutOffset, maxInitialBufferBytes)
-			purgedStderr = s.purgeOldChunks(&s.stderrChunks, s.stderrOffset, maxInitialBufferBytes)
-		} else {
-			// No limit: purge everything
-			purgedStdout = len(s.stdoutChunks)
-			purgedStderr = len(s.stderrChunks)
-			s.stdoutChunks = nil
-			s.stderrChunks = nil
-		}
-		return purgedStdout, purgedStderr
-	}
-
-	// Purge stdout chunks
-	newStdoutChunks := make([]OutputChunk, 0, len(s.stdoutChunks))
-	for _, chunk := range s.stdoutChunks {
-		chunkEnd := chunk.Offset + int64(len(chunk.Data))
-		if chunkEnd > minStdoutOffset {
-			newStdoutChunks = append(newStdoutChunks, chunk)
-		} else {
-			purgedStdout++
-		}
-	}
-	s.stdoutChunks = newStdoutChunks
-
-	// Purge stderr chunks
-	newStderrChunks := make([]OutputChunk, 0, len(s.stderrChunks))
-	for _, chunk := range s.stderrChunks {
-		chunkEnd := chunk.Offset + int64(len(chunk.Data))
-		if chunkEnd > minStderrOffset {
-			newStderrChunks = append(newStderrChunks, chunk)
-		} else {
-			purgedStderr++
-		}
-	}
-	s.stderrChunks = newStderrChunks
-
-	return purgedStdout, purgedStderr
+	return removed
 }

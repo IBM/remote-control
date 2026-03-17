@@ -8,27 +8,29 @@ import (
 
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/server/session"
+	"github.com/gorilla/websocket"
 )
 
 // Server wraps an http.Server and holds the session store.
 type Server struct {
 	httpServer    *http.Server
 	mux           *http.ServeMux
-	store         session.Store
+	store         *session.Store
 	cfg           *config.Config
 	clientTimeout time.Duration
-	connMgr       *ConnectionManager
+	upgrader      *websocket.Upgrader
 }
 
 // NewServer creates a new Server bound to addr, using the given Store.
-func NewServer(addr string, store session.Store, cfg *config.Config) *Server {
+func NewServer(addr string, cfg *config.Config) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		mux:           mux,
-		store:         store,
+		store:         session.NewStore(int(cfg.MaxOutputBuffer)),
 		cfg:           cfg,
 		clientTimeout: time.Duration(cfg.ClientTimeoutSeconds) * time.Second,
-		connMgr:       NewConnectionManager(store),
+		// TODO: Config for buffer sizes
+		upgrader: &websocket.Upgrader{},
 	}
 	s.registerRoutes()
 
@@ -67,23 +69,4 @@ func (s *Server) Addr() string {
 // Handler returns the HTTP handler for use with custom listeners (e.g., in tests).
 func (s *Server) Handler() http.Handler {
 	return s.httpServer.Handler
-}
-
-// checkClientApproved verifies that the requesting client is approved.
-// Returns (approved, readWrite). On false, the handler should return 403.
-func (s *Server) checkClientApproval(sess *session.Session, clientID string, needWrite bool) bool {
-	if !s.cfg.RequireApproval {
-		return true
-	}
-	rec, err := sess.GetClient(clientID)
-	if err != nil {
-		return false
-	}
-	if rec.Approval != session.ApprovalApproved {
-		return false
-	}
-	if needWrite && rec.Permission == session.PermissionReadOnly {
-		return false
-	}
-	return true
 }
