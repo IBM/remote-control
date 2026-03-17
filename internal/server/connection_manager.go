@@ -39,8 +39,8 @@ type Connection interface {
 	// Register a handler for the given message type
 	RegisterHandler(messageType string, handler HandlerFunc)
 	// Send a message to the client on the connection
-	Send(messageType string, message interface{}) error
-	// Poll for queued messages
+	SendOutput(messageType string, message interface{}) error
+	// Poll for queued output
 	Poll() []interface{}
 	// Close the connection
 	Close()

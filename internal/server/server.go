@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/session"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/server/session"
 )
 
 // Server wraps an http.Server and holds the session store.
