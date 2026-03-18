@@ -25,10 +25,6 @@ func sessionToResponse(s *session.Session) types.SessionResponse {
 	}
 }
 
-func stdinEntryToResponse(e *types.StdinEntry) types.StdinResponse {
-	return types.StdinResponse{Data: base64.StdEncoding.EncodeToString(e.Data)}
-}
-
 func outputChunkToResponse(c *types.OutputChunk) types.OutputChunkResponse {
 	return types.OutputChunkResponse{Data: base64.StdEncoding.EncodeToString(c.Data)}
 }
@@ -215,8 +211,8 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinRequest)
 		return http.StatusBadRequest, types.ErrorResponse{Error: "data must be base64"}
 	}
 
-	entry := sess.EnqueueStdin(data)
-	return http.StatusCreated, stdinEntryToResponse(&entry)
+	sess.EnqueueStdin(data)
+	return http.StatusCreated, nil
 }
 
 /* -- Client approvals ------------------------------------------------------ */

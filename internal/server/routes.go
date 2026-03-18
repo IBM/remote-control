@@ -107,8 +107,11 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	status, resp := s.handleEnqueueStdin(id, clientID, req)
-	writeJSON(w, status, resp)
+	if status, resp := s.handleEnqueueStdin(id, clientID, req); nil == resp {
+		w.WriteHeader(status)
+	} else {
+		writeJSON(w, status, resp)
+	}
 }
 
 // handleRegisterClient handles POST /sessions/{id}/clients.
