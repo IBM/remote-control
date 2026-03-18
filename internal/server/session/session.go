@@ -15,33 +15,53 @@ var sessCh = alog.UseChannel("SESSION")
 type SessionClient struct {
 	Info types.ClientInfo
 
-	mu          sync.RWMutex
-	conn        *Connection
-	outputQueue []*types.OutputChunk
+	mu    sync.RWMutex
+	conn  *Connection
+	msgQs map[types.WSMessageType][]interface{}
+}
+
+// Get the connection's send channel
+func (c *SessionClient) GetSendChan() chan []byte {
+	return c.conn.send
+}
+
+// Get the connection's done channel
+func (c *SessionClient) GetDoneChan() chan struct{} {
+	return c.conn.done
 }
 
 // Queue an output chunk and if possible send it to the client
-func (c *SessionClient) SendOutout(chunk *types.OutputChunk) {
+func (c *SessionClient) Send(mType types.WSMessageType, message interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Add to the outputQueue
-	c.outputQueue = append(c.outputQueue, chunk)
+	// Get the right queue
+	q, ok := c.msgQs[mType]
+	if !ok {
+		q = make([]interface{}, 0)
+	}
+
+	// Add to the queue
+	q = append(q, message)
 
 	// Attempt to send to the connection and clear the queue if successful
-	if nil == c.conn.SendMessage(types.WSMessageOutput, c.outputQueue) {
-		c.outputQueue = make([]*types.OutputChunk, 0)
+	if nil == c.conn.SendMessage(mType, q) {
+		q = make([]interface{}, 0)
 	}
+	c.msgQs[mType] = q
 }
 
 // Get all chunks off the queue and remove them
-func (c *SessionClient) PopAllQueue() []*types.OutputChunk {
+func (c *SessionClient) PopAllQueue(mType types.WSMessageType) []interface{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	chunks := c.outputQueue
-	c.outputQueue = make([]*types.OutputChunk, 0)
-	return chunks
+	q, ok := c.msgQs[types.WSMessageOutput]
+	if !ok {
+		return make([]interface{}, 0)
+	}
+	c.msgQs[types.WSMessageOutput] = make([]interface{}, 0)
+	return q
 }
 
 // Close the underlying connection
@@ -114,7 +134,7 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 			sessCh.Log(alog.DEBUG4, "Sending chunk to %s", clientID)
 			wg.Add(1)
 			go func() {
-				client.SendOutout(&chunk)
+				client.Send(types.WSMessageOutput, &chunk)
 			}()
 		}
 	}
@@ -130,7 +150,7 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 }
 
 // EnqueueStdin appends a new stdin entry to the session's STDIN queue.
-func (s *Session) EnqueueStdin(data []byte) types.StdinEntry {
+func (s *Session) EnqueueStdin(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := types.StdinEntry{
@@ -138,9 +158,11 @@ func (s *Session) EnqueueStdin(data []byte) types.StdinEntry {
 	}
 	s.stdin = append(s.stdin, &entry)
 
-	// TODO: Send directly to the host on websocket so host doesn't need to poll
-
-	return entry
+	// Attempt to send to the host connection and clear if successful
+	if err := s.hostConn.SendMessage(types.WSMessageStdin, s.stdin); nil == err {
+		sessCh.Log(alog.DEBUG2, "Stdin sent to host. Purging from queue.")
+		s.stdin = make([]*types.StdinEntry, 0)
+	}
 }
 
 // Complete marks the session as completed with the given exit code.
@@ -166,10 +188,14 @@ func (s *Session) RegisterClient(conn *websocket.Conn) (string, *SessionClient) 
 			Approval:   types.ApprovalPending,
 			LastPollAt: now,
 		},
-		conn:        newConnection(conn),
-		outputQueue: make([]*types.OutputChunk, 0),
+		conn:  newConnection(conn),
+		msgQs: make(map[types.WSMessageType][]interface{}),
 	}
 	s.clients[clientID] = client
+
+	// Notify the host of the pending client
+	s.hostConn.SendMessage(types.WSMessagePendingClient, clientID)
+
 	return clientID, client
 }
 

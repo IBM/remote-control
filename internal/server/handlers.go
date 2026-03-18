@@ -177,7 +177,15 @@ func (s *Server) handlePollOutput(id, clientID string, stdoutOffset, stderrOffse
 	}
 
 	// Pop the data from the client queue
-	chunks := client.PopAllQueue()
+	qData := client.PopAllQueue(types.WSMessageOutput)
+	chunks := make([]*types.OutputChunk, len(qData))
+	for _, entry := range qData {
+		if chunk, ok := entry.(*types.OutputChunk); ok {
+			chunks = append(chunks, chunk)
+		} else {
+			handlerCh.Log(alog.DEBUG, "Invalid type found in output queue")
+		}
+	}
 	outputChunks := make([]types.OutputChunkResponse, len(chunks))
 	for _, chunk := range chunks {
 		outputChunks = append(outputChunks, outputChunkToResponse(chunk))
