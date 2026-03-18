@@ -167,16 +167,19 @@ const (
 	WSMessageOutput WSMessageType = 10
 
 	// client -> host
-	WSMessageStdin         WSMessageType = 20
-	WSMessagePendingClient WSMessageType = 21
+	WSMessageStdin WSMessageType = 20
 
 	// host -> server
 	WSMessageApproveClient WSMessageType = 30
 	WSMessageDenyClient    WSMessageType = 31
-	WSMessageAckStdin      WSMessageType = 32
+	// TODO: Re-enable stdin ack
+	// WSMessageAckStdin      WSMessageType = 32
+
+	// server -> host
+	WSMessagePendingClient WSMessageType = 40
 
 	// server responses
-	WSMessageError WSMessageType = 40
+	WSMessageError WSMessageType = 50
 )
 
 // Generic wrapper for a WebSocket message with type and serialized json

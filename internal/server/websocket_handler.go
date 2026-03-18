@@ -1,10 +1,15 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/server/session"
+	"github.com/gorilla/websocket"
 )
 
 var wsHandlerCh = alog.UseChannel("WS_HANDLER")
@@ -17,299 +22,211 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket upgrade failed: %v", err)
 		return
 	}
-	status, resp := s.handleRegisterClient(r.PathValue("id"), conn)
+	sessionID := r.PathValue("id")
+	status, resp := s.handleRegisterClient(sessionID, conn)
 	if nil == resp {
 		wsHandlerCh.Log(alog.DEBUG, "failed to register websocket client with status [%d]: %v", status, resp)
 		return
 	}
 	clientResp, ok := resp.(types.RegisterClientResponse)
 	if !ok {
-		wsHandlerCh.Log(alog.DEBUG, "Bad type returned by handleRegiserClient")
+		wsHandlerCh.Log(alog.DEBUG, "Bad type returned by handleRegisterClient")
 		return
 	}
 	clientID := clientResp.ClientID
 	wsHandlerCh.Log(alog.INFO, "WebSocket connection established from %s", clientID)
 
+	// Get the client connection
+	var client *session.SessionClient
+	if session, err := s.store.Get(sessionID); nil != err {
+		wsHandlerCh.Log(alog.DEBUG, "Failed to get session %s", sessionID)
+		return
+	} else if client = session.GetClient(clientID); nil == client {
+		wsHandlerCh.Log(alog.DEBUG, "Failed to get session client for %s/%s", sessionID, clientID)
+		return
+	}
+
 	// Start read and write pumps
-	// go s.writePump(connection)
-	// go s.readPump(conn, clientID)
+	go s.readPump(client, conn, sessionID, clientID)
+	go s.writePump(client, conn)
 }
 
-// // readPump reads messages from the WebSocket connection
-// func (s *Server) readPump(conn *websocket.Conn, clientID string) {
-// 	//TODO: Create a proactive deferred unregister through the stack
-// 	// defer func() {
-// 	// 	s.sess.Unregister(clientID)
-// 	// }()
+/* -- Read/Write Pumps ------------------------------------------------------ */
 
-// 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-// 	conn.SetPongHandler(func(string) error {
-// 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-// 		return nil
-// 	})
+// writePump writes messages to the WebSocket connection
+func (s *Server) writePump(client *session.SessionClient, conn *websocket.Conn) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer func() {
+		ticker.Stop()
+		conn.Close()
+	}()
 
-// 	//GLG: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-// 	//
-// 	// TODO:
-// 	// - Add back WS message types
-// 	// - Add back WSMessage wrapper
+	for {
+		select {
+		case message, ok := <-client.GetSendChan():
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if !ok {
+				// Channel closed
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
 
-// 	for {
-// 		_, message, err := conn.ReadMessage()
-// 		if err != nil {
-// 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-// 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket read error: %v", err)
-// 			}
-// 			break
-// 		}
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
+				return
+			}
 
-// 		var msg WSMessage
-// 		if err := json.Unmarshal(message, &msg); err != nil {
-// 			wsHandlerCh.Log(alog.DEBUG, "[remote-control] invalid JSON in WebSocket message: %v", err)
-// 			s.sendError(connection, "", "invalid message format")
-// 			continue
-// 		}
+		case <-ticker.C:
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 
-// 		// Handle message based on type
-// 		switch msg.Type {
-// 		case MsgTypePing:
-// 			connection.UpdatePing()
-// 			s.sendPong(connection)
+		case <-client.GetDoneChan():
+			return
+		}
+	}
+}
 
-// 		case MsgTypeSubscribe:
-// 			if err := s.handleSubscribe(connection, msg, &actualClientID, &clientIDSet); err != nil {
-// 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] subscribe error: %v", err)
-// 				s.sendError(connection, msg.SessionID, err.Error())
-// 			}
+// readPump reads messages from the WebSocket connection
+func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, sessionID, clientID string) {
+	//GLG!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	//TODO: Create a proactive deferred unregister through the stack
+	// defer func() {
+	// 	s.sess.Unregister(clientID)
+	// }()
 
-// 		case MsgTypeUnsubscribe:
-// 			s.handleUnsubscribe(connection, msg)
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 
-// 		case MsgTypeStdinSubmit:
-// 			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit: %v", msg)
-// 			if err := s.handleStdinSubmitWS(connection, msg); err != nil {
-// 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin submit error: %v", err)
-// 				s.sendError(connection, msg.SessionID, err.Error())
-// 			}
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				wsHandlerCh.Log(alog.DEBUG, "WebSocket read error: %v", err)
+			}
+			break
+		}
 
-// 		case MsgTypeStdinAck:
-// 			if err := s.handleStdinAckWS(connection, msg); err != nil {
-// 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin ack error: %v", err)
-// 				s.sendError(connection, msg.SessionID, err.Error())
-// 			}
+		var msg types.WSMessage
+		if err := json.Unmarshal(message, &msg); err != nil {
+			wsHandlerCh.Log(alog.DEBUG, "invalid JSON in WebSocket message: %v", err)
+			s.sendError(client, "invalid message format")
+			continue
+		}
 
-// 		default:
-// 			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %s", msg.Type)
-// 			s.sendError(connection, msg.SessionID, "unknown message type")
-// 		}
-// 	}
-// }
+		// Handle message based on type
+		switch msg.Type {
+		case types.WSMessageOutput:
+			wsHandlerCh.Log(alog.DEBUG3, "Received output: %v", msg)
+			if err := s.handleAppendOutputWS(msg, conn, client, sessionID, clientID); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "output append error: %v", err)
+				s.sendError(client, err.Error())
+			}
 
-// // writePump writes messages to the WebSocket connection
-// func (s *Server) writePump(connection *session.Connection) {
-// 	ticker := time.NewTicker(30 * time.Second)
-// 	defer func() {
-// 		ticker.Stop()
-// 		connection.conn.Close()
-// 	}()
+		case types.WSMessageStdin:
+			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit: %v", msg)
+			if err := s.handleStdinSubmitWS(msg, client, sessionID, clientID); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "stdin submit error: %v", err)
+				s.sendError(client, err.Error())
+			}
 
-// 	for {
-// 		select {
-// 		case message, ok := <-connection.send:
-// 			connection.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-// 			if !ok {
-// 				// Channel closed
-// 				connection.conn.WriteMessage(websocket.CloseMessage, []byte{})
-// 				return
-// 			}
+		case types.WSMessageApproveClient:
+			wsHandlerCh.Log(alog.DEBUG3, "Received client approval: %v", msg)
+			if err := s.handleApproveClientWS(msg, client, sessionID, clientID); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "approve client error: %v", err)
+				s.sendError(client, err.Error())
+			}
 
-// 			if err := connection.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-// 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
-// 				return
-// 			}
+		case types.WSMessageDenyClient:
+			wsHandlerCh.Log(alog.DEBUG3, "Received client denial: %v", msg)
+			if err := s.handleDenyClientWS(client, sessionID, clientID); err != nil {
+				wsHandlerCh.Log(alog.DEBUG, "deny client error: %v", err)
+				s.sendError(client, err.Error())
+			}
 
-// 		case <-ticker.C:
-// 			connection.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-// 			if err := connection.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-// 				return
-// 			}
+		//TODO: Re-enable stdin ack
+		// case types.WSMessageAckStdin:
+		// 	if err := s.handleStdinAckWS(connection, msg); err != nil {
+		// 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin ack error: %v", err)
+		// 		s.sendError(client, err.Error())
+		// 	}
 
-// 		case <-connection.done:
-// 			return
-// 		}
-// 	}
-// }
+		default:
+			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %s", msg.Type)
+			s.sendError(client, "unknown message type")
+		}
+	}
+}
 
-// // handleSubscribe processes subscribe messages
-// func (s *Server) handleSubscribe(connection *Connection, msg WSMessage, actualClientID *string, clientIDSet *bool) error {
-// 	var payload SubscribePayload
-// 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-// 		return err
-// 	}
+/* -- Handlers -------------------------------------------------------------- */
 
-// 	// Set the actual client ID from the first subscribe message
-// 	if !*clientIDSet {
-// 		*actualClientID = payload.ClientID
-// 		*clientIDSet = true
+// handleAppendOutputWS processes output append messages via WebSocket
+func (s *Server) handleAppendOutputWS(msg types.WSMessage, conn *websocket.Conn, client *session.SessionClient, sessionID, clientID string) error {
+	payload, ok := msg.Message.(types.AppendOutputRequest)
+	if !ok {
+		return fmt.Errorf("Invalid AppendOutputRequest received for session %s / client %s", sessionID, clientID)
+	}
+	status, resp := s.handleAppendOutput(sessionID, payload, conn)
+	if status != http.StatusCreated && status != http.StatusNoContent {
+		s.sendErrorJSON(client, resp)
+		return fmt.Errorf("%v", resp)
+	}
+	return nil
+}
 
-// 		// Re-register connection with actual client ID
-// 		s.connMgr.mu.Lock()
-// 		delete(s.connMgr.connections, connection.clientID)
-// 		connection.clientID = payload.ClientID
-// 		s.connMgr.connections[payload.ClientID] = connection
-// 		s.connMgr.mu.Unlock()
+// handleStdinSubmitWS processes stdin submit messages via WebSocket
+func (s *Server) handleStdinSubmitWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
+	payload, ok := msg.Message.(types.StdinRequest)
+	if !ok {
+		return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
+	}
+	status, resp := s.handleEnqueueStdin(sessionID, clientID, payload)
+	if status != http.StatusCreated {
+		s.sendErrorJSON(client, resp)
+		return fmt.Errorf("%v", resp)
+	}
+	return nil
+}
 
-// 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] client ID set to %s", payload.ClientID)
-// 	}
+// handleApproveClientWS processes client approval via WebSocket
+func (s *Server) handleApproveClientWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
+	payload, ok := msg.Message.(types.ApproveClientRequest)
+	if !ok {
+		return fmt.Errorf("Invalid ApproveClientRequest received for session %s / client %s", sessionID, clientID)
+	}
+	status, resp := s.handleApproveClient(sessionID, clientID, payload)
+	if status != http.StatusCreated {
+		s.sendErrorJSON(client, resp)
+		return fmt.Errorf("%v", resp)
+	}
+	return nil
+}
 
-// 	// Auto-register client with session if not already registered
-// 	// This is needed when the server restarts and loses client state
-// 	if sess, err := s.store.Get(payload.SessionID); err == nil {
-// 		sess.EnsureClientRecord(payload.ClientID)
-// 	}
+// handleDenyClientWS processes client denial via WebSocket
+func (s *Server) handleDenyClientWS(client *session.SessionClient, sessionID, clientID string) error {
+	status, resp := s.handleDenyClient(sessionID, clientID)
+	if status != http.StatusCreated {
+		s.sendErrorJSON(client, resp)
+		return fmt.Errorf("%v", resp)
+	}
+	return nil
+}
 
-// 	// Subscribe to session
-// 	if err := s.connMgr.Subscribe(payload.ClientID, payload.SessionID); err != nil {
-// 		return err
-// 	}
+/* -- Error Helpers --------------------------------------------------------- */
 
-// 	wsHandlerCh.Log(alog.DEBUG, "[remote-control] client %s subscribed to session %s", payload.ClientID, payload.SessionID)
+func (s *Server) sendErrorJSON(client *session.SessionClient, v any) {
+	if message, err := json.Marshal(v); nil != err {
+		s.sendError(client, fmt.Sprintf("Unable to send json error: %v", err))
+	} else {
+		s.sendError(client, string(message))
+	}
+}
 
-// 	// Send confirmation
-// 	s.sendSubscribed(connection, payload.SessionID)
-
-// 	return nil
-// }
-
-// // handleUnsubscribe processes unsubscribe messages
-// func (s *Server) handleUnsubscribe(connection *Connection, msg WSMessage) {
-// 	s.connMgr.Unsubscribe(connection.clientID, msg.SessionID)
-// 	wsHandlerCh.Log(alog.DEBUG, "[remote-control] client %s unsubscribed from session %s", connection.clientID, msg.SessionID)
-// 	s.sendUnsubscribed(connection, msg.SessionID)
-// }
-
-// // handleStdinSubmitWS processes stdin submit messages via WebSocket
-// func (s *Server) handleStdinSubmitWS(connection *Connection, msg WSMessage) error {
-// 	var payload StdinPayload
-// 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-// 		return err
-// 	}
-
-// 	// Verify client is subscribed to this session
-// 	if !connection.IsSubscribed(msg.SessionID) {
-// 		wsHandlerCh.Log(alog.DEBUG2, "Connection is not subscribed to session %s", msg.SessionID)
-// 		return errNotSubscribed(msg.SessionID)
-// 	}
-
-// 	// Get session
-// 	sess, err := s.store.Get(msg.SessionID)
-// 	if err != nil {
-// 		wsHandlerCh.Log(alog.DEBUG2, "Failed to get session %s from store", msg.SessionID)
-// 		return err
-// 	}
-
-// 	// Check approval
-// 	if s.cfg.RequireApproval {
-// 		if !s.checkClientApproval(sess, msg.ClientID, true) {
-// 			wsHandlerCh.Log(alog.DEBUG2, "Client %s is not approved", msg.ClientID)
-// 			return errNotApproved()
-// 		}
-// 	}
-
-// 	// Decode and enqueue stdin
-// 	data, err := base64.StdEncoding.DecodeString(payload.Data)
-// 	if err != nil {
-// 		wsHandlerCh.Log(alog.DEBUG2, "Failed to decode base64 payload: %v", err)
-// 		return err
-// 	}
-
-// 	wsHandlerCh.Log(alog.DEBUG3, "Enqueuing stdin to session", sess.ID)
-// 	entry := sess.EnqueueStdin(data)
-
-// 	// Broadcast to all subscribers (including host)
-// 	s.connMgr.Broadcast(msg.SessionID, WSMessage{
-// 		Type:      MsgTypeStdinPending,
-// 		SessionID: msg.SessionID,
-// 		Payload:   marshalStdinEntry(&entry),
-// 	})
-
-// 	return nil
-// }
-
-// // handleStdinAckWS processes stdin ack messages via WebSocket
-// func (s *Server) handleStdinAckWS(connection *Connection, msg WSMessage) error {
-// 	var payload StdinPayload
-// 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-// 		return err
-// 	}
-
-// 	sess, err := s.store.Get(msg.SessionID)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	if err := sess.AckStdin(payload.ID); err != nil {
-// 		return err
-// 	}
-
-// 	return nil
-// }
-
-// // Helper functions to send messages
-
-// func (s *Server) sendPong(connection *Connection) {
-// 	msg := WSMessage{Type: MsgTypePong}
-// 	data, _ := json.Marshal(msg)
-// 	connection.Send(data)
-// }
-
-// func (s *Server) sendSubscribed(connection *Connection, sessionID string) {
-// 	msg := WSMessage{
-// 		Type:      MsgTypeSubscribed,
-// 		SessionID: sessionID,
-// 	}
-// 	data, _ := json.Marshal(msg)
-// 	connection.Send(data)
-// }
-
-// func (s *Server) sendUnsubscribed(connection *Connection, sessionID string) {
-// 	msg := WSMessage{
-// 		Type:      MsgTypeUnsubscribed,
-// 		SessionID: sessionID,
-// 	}
-// 	data, _ := json.Marshal(msg)
-// 	connection.Send(data)
-// }
-
-// func (s *Server) sendError(connection *Connection, sessionID, message string) {
-// 	payload := ErrorPayload{Message: message}
-// 	payloadData, _ := json.Marshal(payload)
-// 	msg := WSMessage{
-// 		Type:      MsgTypeError,
-// 		SessionID: sessionID,
-// 		Payload:   payloadData,
-// 	}
-// 	data, _ := json.Marshal(msg)
-// 	connection.Send(data)
-// }
-
-// // Helper functions for marshaling
-
-// func marshalStdinEntry(entry *session.StdinEntry) json.RawMessage {
-// 	payload := StdinPayload{
-// 		ID:   entry.ID,
-// 		Data: base64.StdEncoding.EncodeToString(entry.Data),
-// 	}
-// 	data, _ := json.Marshal(payload)
-// 	return data
-// }
-
-// // Error helpers
-
-// func errNotSubscribed(sessionID string) error {
-// 	return fmt.Errorf("not subscribed to session: %s", sessionID)
-// }
-
-// func errNotApproved() error {
-// 	return fmt.Errorf("not approved or read-only")
-// }
+func (s *Server) sendError(client *session.SessionClient, message string) {
+	payload := types.ErrorResponse{Error: message}
+	client.Send(types.WSMessageError, payload)
+}
