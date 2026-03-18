@@ -161,3 +161,32 @@ type RegisterClientResponse struct {
 type ApproveClientRequest struct {
 	Permission Permission `json:"permission,omitempty"`
 }
+
+/* -- WebSocket Messaging --------------------------------------------------- */
+
+type WSMessageType uint8
+
+const (
+	WSMessageUnknown WSMessageType = 0
+
+	// host -> client
+	WSMessageOutput WSMessageType = 10
+
+	// client -> host
+	WSMessageStdin         WSMessageType = 20
+	WSMessagePendingClient WSMessageType = 21
+
+	// host -> server
+	WSMessageApproveClient WSMessageType = 30
+	WSMessageDenyClient    WSMessageType = 31
+	WSMessageAckStdin      WSMessageType = 32
+
+	// server responses
+	WSMessageError WSMessageType = 40
+)
+
+// Generic wrapper for a WebSocket message with type and serialized json
+type WSMessage struct {
+	Type    WSMessageType `json:"type"`
+	Message interface{}   `json:"message"`
+}

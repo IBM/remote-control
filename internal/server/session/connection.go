@@ -30,19 +30,25 @@ func newConnection(conn *websocket.Conn) *Connection {
 	}
 }
 
-// Send output chunks to the client
-func (c *Connection) SendOutput(chunks []*types.OutputChunk) error {
+// Send a serialized message to the client
+func (c *Connection) SendMessage(mType types.WSMessageType, message interface{}) error {
+
 	if nil == c.conn {
 		return fmt.Errorf("No websocket")
 	}
 
+	// Wrap in the WSMessage envelope
+	wsMsg := types.WSMessage{
+		Type:    types.WSMessageOutput,
+		Message: message,
+	}
+
 	// Serialize to the WS wire format
-	data, err := json.Marshal(chunks)
+	data, err := json.Marshal(wsMsg)
 	if nil != err {
 		return fmt.Errorf("Json marshal error: %v", err)
 	}
 
-	// Send on the send channel
 	select {
 	case c.send <- data:
 		return nil

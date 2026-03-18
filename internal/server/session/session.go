@@ -29,7 +29,7 @@ func (c *SessionClient) SendOutout(chunk *types.OutputChunk) {
 	c.outputQueue = append(c.outputQueue, chunk)
 
 	// Attempt to send to the connection and clear the queue if successful
-	if nil == c.conn.SendOutput(c.outputQueue) {
+	if nil == c.conn.SendMessage(types.WSMessageOutput, c.outputQueue) {
 		c.outputQueue = make([]*types.OutputChunk, 0)
 	}
 }
