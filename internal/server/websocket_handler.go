@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -159,11 +160,25 @@ func (s *Server) handleAppendOutputWS(msg types.WSMessage, conn *websocket.Conn,
 
 // handleStdinSubmitWS processes stdin submit messages via WebSocket
 func (s *Server) handleStdinSubmitWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
-	payload, ok := msg.Message.(types.StdinRequest)
-	if !ok {
+	// The message can be either StdinRequest (binary data) or StdinEntry
+	var data []byte
+
+	// Try StdinRequest first
+	if req, ok := msg.Message.(map[string]interface{}); ok {
+		if dataStr, ok := req["data"].(string); ok {
+			var err error
+			data, err = base64.StdEncoding.DecodeString(dataStr)
+			if err != nil {
+				return fmt.Errorf("Invalid StdinRequest received for session %s / client %s: %v", sessionID, clientID, err)
+			}
+		} else {
+			return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
+		}
+	} else {
 		return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
 	}
-	status, resp := s.handleEnqueueStdin(sessionID, clientID, payload)
+
+	status, resp := s.handleEnqueueStdin(sessionID, clientID, types.StdinRequest{Data: string(data)})
 	if status != http.StatusCreated {
 		s.sendErrorJSON(client, resp)
 		return fmt.Errorf("%v", resp)

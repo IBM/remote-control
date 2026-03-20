@@ -9,16 +9,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/session"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 )
+
+/* --- Test Helpers --------------------------------------------------------- */
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
-	store, _ := session.NewStore("memory", session.StoreOptions{})
-	cfg := &config.Config{RequireApproval: false}
-	srv := NewServer(":0", store, cfg)
-	ts := httptest.NewServer(srv.mux)
+	cfg := &config.Config{
+		RequireApproval:      false,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	srv := NewServer(":0", cfg)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return srv, ts
+}
+
+func newTestServerWithConfig(t *testing.T, cfg *config.Config) (*Server, *httptest.Server) {
+	t.Helper()
+	srv := NewServer(":0", cfg)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return srv, ts
 }
@@ -42,6 +55,28 @@ func getJSON(t *testing.T, ts *httptest.Server, path string) *http.Response {
 	return resp
 }
 
+func deleteJSON(t *testing.T, ts *httptest.Server, path string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+path, nil)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", path, err)
+	}
+	return resp
+}
+
+func patchJSON(t *testing.T, ts *httptest.Server, path string, body any) *http.Response {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPatch, ts.URL+path, bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", path, err)
+	}
+	return resp
+}
+
 func decodeJSON(t *testing.T, resp *http.Response, v any) {
 	t.Helper()
 	defer resp.Body.Close()
@@ -50,205 +85,714 @@ func decodeJSON(t *testing.T, resp *http.Response, v any) {
 	}
 }
 
-func TestCreateAndGetSession(t *testing.T) {
-	_, ts := newTestServer(t)
-
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
+func createTestSession(t *testing.T, ts *httptest.Server) types.SessionInfo {
+	t.Helper()
+	resp := postJSON(t, ts, "/sessions", types.CreateSessionRequest{})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
-	var created SessionResponse
-	decodeJSON(t, resp, &created)
-	if created.ID == "" {
-		t.Error("expected non-empty session ID")
+	var session types.SessionInfo
+	decodeJSON(t, resp, &session)
+	return session
+}
+
+func registerTestClient(t *testing.T, ts *httptest.Server, sessionID string) string {
+	t.Helper()
+	resp := postJSON(t, ts, "/sessions/"+sessionID+"/clients", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if created.Status != "active" {
-		t.Errorf("expected active status, got %q", created.Status)
+	var result types.RegisterClientResponse
+	decodeJSON(t, resp, &result)
+	return result.ClientID
+}
+
+/* --- Session CRUD Tests --------------------------------------------------- */
+
+func TestHandleCreateSessionWithoutID(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	resp := postJSON(t, ts, "/sessions", types.CreateSessionRequest{})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 
-	// GET
-	resp2 := getJSON(t, ts, "/sessions/"+created.ID)
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp2.StatusCode)
+	var session types.SessionInfo
+	decodeJSON(t, resp, &session)
+
+	if session.ID == "" {
+		t.Error("expected non-empty session ID")
 	}
-	var got SessionResponse
-	decodeJSON(t, resp2, &got)
-	if got.ID != created.ID {
-		t.Errorf("IDs don't match: %s vs %s", got.ID, created.ID)
+	if session.Status != types.SessionActive {
+		t.Errorf("expected active status, got %d", session.Status)
+	}
+	if session.CreatedAt.IsZero() {
+		t.Error("expected non-zero CreatedAt timestamp")
 	}
 }
 
-func TestListSessions(t *testing.T) {
+func TestHandleCreateSessionWithID(t *testing.T) {
 	_, ts := newTestServer(t)
-	postJSON(t, ts, "/sessions", CreateSessionRequest{})
-	postJSON(t, ts, "/sessions", CreateSessionRequest{})
+
+	customID := "custom-session-123"
+	resp := postJSON(t, ts, "/sessions", types.CreateSessionRequest{ID: customID})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	var session types.SessionInfo
+	decodeJSON(t, resp, &session)
+
+	if session.ID != customID {
+		t.Errorf("expected ID %q, got %q", customID, session.ID)
+	}
+}
+
+func TestHandleListSessionsEmpty(t *testing.T) {
+	_, ts := newTestServer(t)
 
 	resp := getJSON(t, ts, "/sessions")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	var sessions []SessionResponse
+
+	var sessions []types.SessionInfo
 	decodeJSON(t, resp, &sessions)
-	if len(sessions) != 2 {
-		t.Errorf("expected 2 sessions, got %d", len(sessions))
+
+	if len(sessions) != 0 {
+		t.Errorf("expected 0 sessions, got %d", len(sessions))
 	}
 }
 
-func TestDeleteSession(t *testing.T) {
+func TestHandleListSessionsMultiple(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
-	var created SessionResponse
-	decodeJSON(t, resp, &created)
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/sessions/"+created.ID, nil)
-	delResp, _ := ts.Client().Do(req)
-	if delResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", delResp.StatusCode)
+	// Create 3 sessions
+	for i := 0; i < 3; i++ {
+		postJSON(t, ts, "/sessions", types.CreateSessionRequest{})
 	}
 
-	// Getting it now should 404.
+	resp := getJSON(t, ts, "/sessions")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var sessions []types.SessionInfo
+	decodeJSON(t, resp, &sessions)
+
+	if len(sessions) != 3 {
+		t.Errorf("expected 3 sessions, got %d", len(sessions))
+	}
+}
+
+func TestHandleGetSessionExists(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+
+	resp := getJSON(t, ts, "/sessions/"+created.ID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var session types.SessionInfo
+	decodeJSON(t, resp, &session)
+
+	if session.ID != created.ID {
+		t.Errorf("expected ID %q, got %q", created.ID, session.ID)
+	}
+}
+
+func TestHandleGetSessionNotFound(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	resp := getJSON(t, ts, "/sessions/nonexistent")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+
+	var errResp types.ErrorResponse
+	decodeJSON(t, resp, &errResp)
+	if errResp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestHandleDeleteSessionExists(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+
+	resp := deleteJSON(t, ts, "/sessions/"+created.ID)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+
+	// Verify session is gone
 	getResp := getJSON(t, ts, "/sessions/"+created.ID)
 	if getResp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 after delete, got %d", getResp.StatusCode)
 	}
 }
 
-func TestPatchSession(t *testing.T) {
+func TestHandleDeleteSessionNotFound(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
-	var created SessionResponse
-	decodeJSON(t, resp, &created)
 
-	patchResp := postJSON(t, ts, "/sessions/"+created.ID, nil)
-	_ = patchResp
-
-	// Use PATCH properly.
-	data, _ := json.Marshal(PatchSessionRequest{ExitCode: 0})
-	req, _ := http.NewRequest(http.MethodPatch, ts.URL+"/sessions/"+created.ID, bytes.NewReader(data))
-	req.Header.Set("Content-Type", "application/json")
-	patchResp2, _ := ts.Client().Do(req)
-	if patchResp2.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", patchResp2.StatusCode)
-	}
-	var patched SessionResponse
-	decodeJSON(t, patchResp2, &patched)
-	if patched.Status != "completed" {
-		t.Errorf("expected completed, got %q", patched.Status)
+	resp := deleteJSON(t, ts, "/sessions/nonexistent")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }
 
-func TestAppendAndPollOutput(t *testing.T) {
+func TestHandlePatchSession(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
-	var created SessionResponse
-	decodeJSON(t, resp, &created)
-	sid := created.ID
 
-	now := time.Now()
+	created := createTestSession(t, ts)
 
-	// Register a client.
-	clientResp := postJSON(t, ts, "/sessions/"+sid+"/clients", nil)
-	var clientRespData struct {
-		ClientID string `json:"client_id"`
-	}
-	decodeJSON(t, clientResp, &clientRespData)
-	clientID := clientRespData.ClientID
-	if clientID == "" {
-		t.Fatalf("expected non-empty client_id")
+	exitCode := 42
+	resp := patchJSON(t, ts, "/sessions/"+created.ID, types.PatchSessionRequest{ExitCode: exitCode})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Append stdout.
-	stdoutData := base64.StdEncoding.EncodeToString([]byte("hello stdout"))
-	resp1 := postJSON(t, ts, "/sessions/"+sid+"/output", AppendOutputRequest{
-		Stream:    "stdout",
-		Data:      stdoutData,
-		Timestamp: now.Format(time.RFC3339Nano),
-	})
-	if resp1.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", resp1.StatusCode)
-	}
+	var session types.SessionInfo
+	decodeJSON(t, resp, &session)
 
-	// Append stderr.
-	stderrData := base64.StdEncoding.EncodeToString([]byte("hello stderr"))
-	resp2 := postJSON(t, ts, "/sessions/"+sid+"/output", AppendOutputRequest{
-		Stream:    "stderr",
-		Data:      stderrData,
-		Timestamp: now.Add(time.Millisecond).Format(time.RFC3339Nano),
-	})
-	if resp2.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", resp2.StatusCode)
+	if session.Status != types.SessionCompleted {
+		t.Errorf("expected completed status, got %d", session.Status)
 	}
-
-	// Poll output with retry to handle async processing (with client_id).
-	var poll PollOutputResponse
-	for i := 0; i < 20; i++ {
-		pollResp := getJSON(t, ts, "/sessions/"+sid+"/output?client_id="+clientID+"&stdout_offset=0&stderr_offset=0")
-		if pollResp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", pollResp.StatusCode)
-		}
-		decodeJSON(t, pollResp, &poll)
-		if len(poll.Chunks) >= 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	if session.ExitCode == nil || *session.ExitCode != exitCode {
+		t.Errorf("expected exit code %d, got %v", exitCode, session.ExitCode)
 	}
-
-	if len(poll.Chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d after retries", len(poll.Chunks))
-	}
-
-	// First chunk should be stdout (earlier timestamp).
-	if poll.Chunks[0].Stream != "stdout" {
-		t.Errorf("expected first chunk to be stdout, got %q", poll.Chunks[0].Stream)
-	}
-	if poll.Chunks[1].Stream != "stderr" {
-		t.Errorf("expected second chunk to be stderr, got %q", poll.Chunks[1].Stream)
-	}
-
-	// Verify next offsets.
-	if poll.NextOffsets["stdout"] != 12 {
-		t.Errorf("expected stdout next offset 12, got %d", poll.NextOffsets["stdout"])
-	}
-	if poll.NextOffsets["stderr"] != 12 {
-		t.Errorf("expected stderr next offset 12, got %d", poll.NextOffsets["stderr"])
-	}
-
-	// Poll again with updated offsets and client_id — should get no chunks.
-	pollResp2 := getJSON(t, ts, "/sessions/"+sid+"/output?client_id="+clientID+"&stdout_offset=12&stderr_offset=12")
-	var poll2 PollOutputResponse
-	decodeJSON(t, pollResp2, &poll2)
-	if len(poll2.Chunks) != 0 {
-		t.Errorf("expected no chunks on second poll, got %d", len(poll2.Chunks))
+	if session.CompletedAt == nil || session.CompletedAt.IsZero() {
+		t.Error("expected non-zero CompletedAt timestamp")
 	}
 }
 
-func TestStdinEnqueueAndPeek(t *testing.T) {
+func TestHandlePatchSessionNotFound(t *testing.T) {
 	_, ts := newTestServer(t)
-	resp := postJSON(t, ts, "/sessions", CreateSessionRequest{})
-	var created SessionResponse
-	decodeJSON(t, resp, &created)
-	sid := created.ID
 
-	stdinData := base64.StdEncoding.EncodeToString([]byte("ls -la\n"))
-	enqResp := postJSON(t, ts, "/sessions/"+sid+"/stdin?client_id=test-client", StdinRequest{
-		Data: stdinData,
-	})
-	if enqResp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected 201, got %d", enqResp.StatusCode)
-	}
-	var entry StdinResponse
-	decodeJSON(t, enqResp, &entry)
-	if entry.ID == 0 {
-		t.Error("expected non-zero entry ID")
-	}
-
-	peekResp := getJSON(t, ts, "/sessions/"+sid+"/stdin")
-	if peekResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", peekResp.StatusCode)
-	}
-	var peeked StdinResponse
-	decodeJSON(t, peekResp, &peeked)
-	if peeked.ID != entry.ID {
-		t.Errorf("peek returned wrong ID: %d vs %d", peeked.ID, entry.ID)
+	resp := patchJSON(t, ts, "/sessions/nonexistent", types.PatchSessionRequest{ExitCode: 0})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestHandlePatchSessionDeletesSession(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+
+	// Complete the session
+	patchJSON(t, ts, "/sessions/"+created.ID, types.PatchSessionRequest{ExitCode: 0})
+
+	// Verify session is deleted
+	getResp := getJSON(t, ts, "/sessions/"+created.ID)
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after completion, got %d", getResp.StatusCode)
+	}
+}
+
+/* --- Output Handling Tests ------------------------------------------------ */
+
+func TestHandleAppendOutputNewSession(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	sessionID := "new-session-123"
+	data := base64.StdEncoding.EncodeToString([]byte("test output"))
+
+	resp := postJSON(t, ts, "/sessions/"+sessionID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 (session created), got %d", resp.StatusCode)
+	}
+
+	// Verify session was created
+	getResp := getJSON(t, ts, "/sessions/"+sessionID)
+	if getResp.StatusCode != http.StatusOK {
+		t.Errorf("expected session to exist, got %d", getResp.StatusCode)
+	}
+}
+
+func TestHandleAppendOutputExistingSession(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	data := base64.StdEncoding.EncodeToString([]byte("test output"))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleAppendOutputStdout(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	data := base64.StdEncoding.EncodeToString([]byte("stdout data"))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleAppendOutputStderr(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	data := base64.StdEncoding.EncodeToString([]byte("stderr data"))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStderr,
+		Data:   data,
+	})
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleAppendOutputInvalidStream(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	data := base64.StdEncoding.EncodeToString([]byte("test data"))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: 99, // Invalid stream
+		Data:   data,
+	})
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	var errResp types.ErrorResponse
+	decodeJSON(t, resp, &errResp)
+	if errResp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestHandleAppendOutputEmptyData(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	data := base64.StdEncoding.EncodeToString([]byte(""))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	// Empty data should still succeed
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleAppendOutputClientTimeout(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      false,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 1, // 1 second timeout
+	}
+	srv, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Get the session and update client activity to make it "old"
+	sess, _ := srv.store.Get(created.ID)
+	client := sess.GetClient(clientID)
+	if client != nil {
+		client.Info.LastPollAt = time.Now().Add(-2 * time.Second)
+	}
+
+	// Append output, which should trigger cleanup
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+	postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	// Verify client was removed
+	sess, _ = srv.store.Get(created.ID)
+	if sess.GetClient(clientID) != nil {
+		t.Error("expected inactive client to be removed")
+	}
+}
+
+/* --- Poll/Ack Flow Tests -------------------------------------------------- */
+
+func TestHandlePollOutputEmpty(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/1/poll?client_id="+clientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandlePollOutputWithMessages(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Append some output
+	data := base64.StdEncoding.EncodeToString([]byte("test output"))
+	postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	// Poll for output
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/1/poll?client_id="+clientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) == 0 {
+		t.Error("expected at least 1 element")
+	}
+}
+
+func TestHandlePollStdinEmpty(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/2/poll?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandlePollStdinWithMessages(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Enqueue stdin
+	data := base64.StdEncoding.EncodeToString([]byte("ls -la\n"))
+	postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	// Poll for stdin (as host)
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/2/poll?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) == 0 {
+		t.Error("expected at least 1 element")
+	}
+}
+
+func TestHandlePollPendingClientEmpty(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      true,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	_, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/3/poll?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandlePollPendingClientWithMessages(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      true,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	_, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+
+	// Register a client (will be pending)
+	registerTestClient(t, ts, created.ID)
+
+	// Poll for pending clients (as host)
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/3/poll?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var poll types.PollResponse
+	decodeJSON(t, resp, &poll)
+
+	if len(poll.Elements) == 0 {
+		t.Error("expected at least 1 element")
+	}
+}
+
+func TestHandlePollSessionNotFound(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	resp := getJSON(t, ts, "/sessions/nonexistent/1/poll?client_id=test")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleAckOutput(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Append output
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+	postJSON(t, ts, "/sessions/"+created.ID+"/output", types.AppendOutputRequest{
+		Stream: types.StreamStdout,
+		Data:   data,
+	})
+
+	// Ack the output
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/1/ack?client_id="+clientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Poll again - should be empty
+	pollResp := getJSON(t, ts, "/sessions/"+created.ID+"/1/poll?client_id="+clientID)
+	var poll types.PollResponse
+	decodeJSON(t, pollResp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements after ack, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandleAckStdin(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Enqueue stdin
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+	postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	// Ack the stdin
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/2/ack?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Poll again - should be empty
+	pollResp := getJSON(t, ts, "/sessions/"+created.ID+"/2/poll?client_id="+types.HostClientID)
+	var poll types.PollResponse
+	decodeJSON(t, pollResp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements after ack, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandleAckPendingClient(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      true,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	_, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+	registerTestClient(t, ts, created.ID)
+
+	// Ack pending clients
+	resp := getJSON(t, ts, "/sessions/"+created.ID+"/3/ack?client_id="+types.HostClientID)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Poll again - should be empty
+	pollResp := getJSON(t, ts, "/sessions/"+created.ID+"/3/poll?client_id="+types.HostClientID)
+	var poll types.PollResponse
+	decodeJSON(t, pollResp, &poll)
+
+	if len(poll.Elements) != 0 {
+		t.Errorf("expected 0 elements after ack, got %d", len(poll.Elements))
+	}
+}
+
+func TestHandleAckSessionNotFound(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	resp := getJSON(t, ts, "/sessions/nonexistent/1/ack?client_id=test")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+/* --- Stdin Handling Tests ------------------------------------------------- */
+
+func TestHandleEnqueueStdin(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	data := base64.StdEncoding.EncodeToString([]byte("ls -la\n"))
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleEnqueueStdinBase64Decode(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	testData := "test stdin data"
+	data := base64.StdEncoding.EncodeToString([]byte(testData))
+
+	postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	// Poll as host to verify data
+	pollResp := getJSON(t, ts, "/sessions/"+created.ID+"/2/poll?client_id="+types.HostClientID)
+	var poll types.PollResponse
+	decodeJSON(t, pollResp, &poll)
+
+	if len(poll.Elements) == 0 {
+		t.Fatal("expected stdin entry in queue")
+	}
+}
+
+func TestHandleEnqueueStdinInvalidBase64(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: "not-valid-base64!!!",
+	})
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	var errResp types.ErrorResponse
+	decodeJSON(t, resp, &errResp)
+	if errResp.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestHandleEnqueueStdinSessionNotFound(t *testing.T) {
+	_, ts := newTestServer(t)
+
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+	resp := postJSON(t, ts, "/sessions/nonexistent/stdin?client_id=test", types.StdinRequest{
+		Data: data,
+	})
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleEnqueueStdinWithApproval(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      true,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	srv, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Approve client with read-write permission
+	sess, _ := srv.store.Get(created.ID)
+	sess.ApproveClient(clientID, types.PermissionReadWrite)
+
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleEnqueueStdinReadOnlyDenied(t *testing.T) {
+	cfg := &config.Config{
+		RequireApproval:      true,
+		MaxOutputBuffer:      1024 * 1024,
+		ClientTimeoutSeconds: 0,
+	}
+	srv, ts := newTestServerWithConfig(t, cfg)
+
+	created := createTestSession(t, ts)
+	clientID := registerTestClient(t, ts, created.ID)
+
+	// Approve client with read-only permission
+	sess, _ := srv.store.Get(created.ID)
+	sess.ApproveClient(clientID, types.PermissionReadOnly)
+
+	data := base64.StdEncoding.EncodeToString([]byte(
