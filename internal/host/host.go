@@ -427,7 +427,6 @@ func deriveWebSocketURL(httpURL string) string {
 func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
 	// Always use the poll/ack fallback for client approvals
 	// WebSocket callbacks are handled by the WebSocket readPump
-	_ = rawMode
 	h.pollPendingClients(ctx, sessionID, rawMode)
 }
 
