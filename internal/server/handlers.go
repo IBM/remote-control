@@ -15,20 +15,6 @@ var handlerCh = alog.UseChannel("HANDLER")
 
 /* --- Helpers -------------------------------------------------------------- */
 
-func sessionToResponse(s *session.Session) types.SessionResponse {
-	return types.SessionResponse{
-		ID:          s.Info.ID,
-		Status:      int(s.Info.Status),
-		CreatedAt:   s.Info.CreatedAt,
-		CompletedAt: s.Info.CompletedAt,
-		ExitCode:    s.Info.ExitCode,
-	}
-}
-
-func outputChunkToResponse(c *types.OutputChunk) types.OutputChunkResponse {
-	return types.OutputChunkResponse{Data: base64.StdEncoding.EncodeToString(c.Data)}
-}
-
 // checkClientApproved verifies that the requesting client is approved.
 // Returns (approved, readWrite). On false, the handler should return 403.
 func checkClientApproval(client *session.SessionClient, needWrite bool) bool {
@@ -52,7 +38,7 @@ func (s *Server) handleCreateSession(req types.CreateSessionRequest, conn *webso
 	if err != nil {
 		return http.StatusInternalServerError, types.ErrorResponse{Error: err.Error()}
 	}
-	return http.StatusCreated, sessionToResponse(sess)
+	return http.StatusCreated, sess.Info
 }
 
 func (s *Server) handleListSessions() (int, interface{}) {
@@ -60,9 +46,9 @@ func (s *Server) handleListSessions() (int, interface{}) {
 	if err != nil {
 		return http.StatusInternalServerError, types.ErrorResponse{Error: err.Error()}
 	}
-	resp := make([]types.SessionResponse, 0, len(sessions))
+	resp := make([]types.SessionInfo, 0, len(sessions))
 	for _, sess := range sessions {
-		resp = append(resp, sessionToResponse(sess))
+		resp = append(resp, sess.Info)
 	}
 	return http.StatusOK, resp
 }
@@ -72,7 +58,7 @@ func (s *Server) handleGetSession(id string) (int, interface{}) {
 	if err != nil {
 		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
-	return http.StatusOK, sessionToResponse(sess)
+	return http.StatusOK, sess.Info
 }
 
 func (s *Server) handleDeleteSession(id string) (int, interface{}) {
@@ -96,7 +82,7 @@ func (s *Server) handlePatchSession(id string, req types.PatchSessionRequest) (i
 		handlerCh.Log(alog.DEBUG, "[remote-control] deleted completed session: %s", id)
 	}
 
-	return http.StatusOK, sessionToResponse(sess)
+	return http.StatusOK, sess.Info
 }
 
 /* --- Output --------------------------------------------------------------- */
@@ -118,18 +104,14 @@ func (s *Server) handleAppendOutput(id string, req types.AppendOutputRequest, co
 	}
 
 	// Decode the output data to bytes
-	stream, data, err := req.Decode()
-	if err != nil {
-		return http.StatusBadRequest, types.ErrorResponse{Error: err.Error()}
-	}
-	if stream != types.StreamStdout && stream != types.StreamStderr {
+	if req.Stream != types.StreamStdout && req.Stream != types.StreamStderr {
 		return http.StatusBadRequest, types.ErrorResponse{
 			Error: fmt.Sprintf("stream must be %d (stdout) or %d (stderr)", types.StreamStdout, types.StreamStderr),
 		}
 	}
 
 	// Add the output to the session
-	sess.AppendOutput(stream, data)
+	sess.AppendOutput(req.Stream, req.Data)
 
 	// Event-driven cleanup: remove inactive clients when host sends new data
 	if s.cfg.ClientTimeoutSeconds > 0 {
@@ -143,54 +125,28 @@ func (s *Server) handleAppendOutput(id string, req types.AppendOutputRequest, co
 	return respSuccess, nil
 }
 
-func (s *Server) handlePollOutput(id, clientID string, stdoutOffset, stderrOffset int64) (int, interface{}) {
+func (s *Server) handlePoll(sessionID, clientID string, mType types.WSMessageType) (int, interface{}) {
 	// Get the session
-	sess, err := s.store.Get(id)
+	sess, err := s.store.Get(sessionID)
 	if nil != err {
 		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
 
-	// Get the client connection
-	client := sess.GetClient(clientID)
-	if nil == client {
-		return http.StatusNotFound, types.ErrorResponse{Error: fmt.Sprintf("Invalid client id %s for session %s", clientID, id)}
+	// Peek at the queue for the given session
+	queued := sess.PeekClientQueue(clientID, mType)
+	return http.StatusOK, types.PollResponse{Elements: queued}
+}
+
+func (s *Server) handleAck(sessionID, clientID string, mType types.WSMessageType) (int, interface{}) {
+	// Get the session
+	sess, err := s.store.Get(sessionID)
+	if nil != err {
+		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
 
-	// Enforce client approval for output polling
-	if s.cfg.RequireApproval {
-		if !checkClientApproval(client, false) {
-			return http.StatusForbidden, types.ErrorResponse{Error: "not approved"}
-		}
-	}
-
-	// Update client activity
-	if err := sess.UpdateClientActivity(clientID); err != nil {
-		handlerCh.Log(alog.DEBUG, "[remote-control] client activity update failed: %v", err)
-	}
-
-	// Event-driven cleanup: remove inactive clients
-	if s.cfg.ClientTimeoutSeconds > 0 {
-		removed := sess.RemoveInactiveClients(s.clientTimeout)
-		if len(removed) > 0 {
-			handlerCh.Log(alog.DEBUG, "[remote-control] removed inactive clients: %v", removed)
-		}
-	}
-
-	// Pop the data from the client queue
-	qData := client.PopAllQueue(types.WSMessageOutput)
-	chunks := make([]*types.OutputChunk, len(qData))
-	for _, entry := range qData {
-		if chunk, ok := entry.(*types.OutputChunk); ok {
-			chunks = append(chunks, chunk)
-		} else {
-			handlerCh.Log(alog.DEBUG, "Invalid type found in output queue")
-		}
-	}
-	outputChunks := make([]types.OutputChunkResponse, len(chunks))
-	for _, chunk := range chunks {
-		outputChunks = append(outputChunks, outputChunkToResponse(chunk))
-	}
-	return http.StatusOK, types.PollOutputResponse{Chunks: outputChunks}
+	// Clear the queue for the given session/client/type
+	sess.ClearClientQueue(clientID, mType)
+	return http.StatusOK, nil
 }
 
 /* --- STDIN ---------------------------------------------------------------- */
@@ -203,11 +159,8 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinRequest)
 		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
 
-	// Determine if this is a host submission (no client_id provided)
-	isHostSubmission := clientID == ""
-
 	// Enforce client approval and write permission for non-host submissions
-	if !isHostSubmission && s.cfg.RequireApproval {
+	if s.cfg.RequireApproval {
 		client := sess.GetClient(clientID)
 		if nil == client || !checkClientApproval(client, true) {
 			return http.StatusForbidden, types.ErrorResponse{Error: "not approved or read-only"}
@@ -250,20 +203,6 @@ func (s *Server) handleRegisterClient(id string, conn *websocket.Conn) (int, int
 		ClientID: clientID,
 		Status:   client.Info.Approval,
 	}
-}
-
-// handleListClients handles GET /sessions/{id}/clients.
-// Supports ?status=pending to filter to pending clients.
-func (s *Server) handleListClients(id, statusFilter string) (int, interface{}) {
-	sess, err := s.store.Get(id)
-	if err != nil {
-		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
-	}
-
-	if statusFilter == "pending" {
-		return http.StatusOK, sess.ListPendingClients()
-	}
-	return http.StatusOK, sess.ListClients()
 }
 
 // handleApproveClient handles POST /sessions/{id}/clients/{cid}/approve.

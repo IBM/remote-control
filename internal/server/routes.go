@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -24,12 +25,14 @@ func (s *Server) registerRoutes() {
 
 	// I/O
 	mux.HandleFunc("POST /sessions/{id}/output", s.handleAppendOutputRoute)
-	mux.HandleFunc("GET /sessions/{id}/output", s.handlePollOutputRoute)
 	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdinRoute)
+
+	// Poll / Ack
+	mux.HandleFunc("GET / sessions/{id}/{m_type}/poll", s.handlePollRoute)
+	mux.HandleFunc("GET / sessions/{id}/{m_type}/ack", s.handleAckRoute)
 
 	// Approval
 	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClientRoute)
-	mux.HandleFunc("GET /sessions/{id}/clients", s.handleListClientsRoute)
 	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/approve", s.handleApproveClientRoute)
 	mux.HandleFunc("POST /sessions/{id}/clients/{cid}/deny", s.handleDenyClientRoute)
 }
@@ -90,11 +93,41 @@ func (s *Server) handleAppendOutputRoute(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *Server) handlePollOutputRoute(w http.ResponseWriter, r *http.Request) {
-	stdoutOffset, _ := strconv.ParseInt(r.URL.Query().Get("stdout_offset"), 10, 64)
-	stderrOffset, _ := strconv.ParseInt(r.URL.Query().Get("stderr_offset"), 10, 64)
-	status, resp := s.handlePollOutput(r.PathValue("id"), r.URL.Query().Get("client_id"), stdoutOffset, stderrOffset)
+func (s *Server) handlePollRoute(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	clientID := r.URL.Query().Get("client_id")
+	mTypeStr := r.PathValue("m_type")
+	mTypeInt, err := strconv.Atoi(mTypeStr)
+	if nil != err {
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: fmt.Sprintf("Invalid message type: %s", mTypeStr)})
+		return
+	}
+	mType := types.GetWSMessageType(mTypeInt)
+	if types.WSMessageUnknown == mType {
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: fmt.Sprintf("Unknown message type: %d", mTypeInt)})
+	}
+	status, resp := s.handlePoll(sessionID, clientID, mType)
 	writeJSON(w, status, resp)
+}
+
+func (s *Server) handleAckRoute(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	clientID := r.URL.Query().Get("client_id")
+	mTypeStr := r.PathValue("m_type")
+	mTypeInt, err := strconv.Atoi(mTypeStr)
+	if nil != err {
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: fmt.Sprintf("Invalid message type: %s", mTypeStr)})
+		return
+	}
+	mType := types.GetWSMessageType(mTypeInt)
+	if types.WSMessageUnknown == mType {
+		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: fmt.Sprintf("Unknown message type: %d", mTypeInt)})
+	}
+	if status, resp := s.handleAck(sessionID, clientID, mType); nil == resp {
+		w.WriteHeader(status)
+	} else {
+		writeJSON(w, status, resp)
+	}
 }
 
 func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request) {
@@ -118,13 +151,6 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 // Server generates a unique client ID and returns it to the client.
 func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Request) {
 	status, resp := s.handleRegisterClient(r.PathValue("id"), nil)
-	writeJSON(w, status, resp)
-}
-
-// handleListClients handles GET /sessions/{id}/clients.
-// Supports ?status=pending to filter to pending clients.
-func (s *Server) handleListClientsRoute(w http.ResponseWriter, r *http.Request) {
-	status, resp := s.handleListClients(r.PathValue("id"), r.URL.Query().Get("status"))
 	writeJSON(w, status, resp)
 }
 

@@ -20,6 +20,21 @@ type SessionClient struct {
 	msgQs map[types.WSMessageType][]interface{}
 }
 
+func newSessionClient(clientID string, approval types.ApprovalStatus, conn *websocket.Conn) *SessionClient {
+	now := time.Now()
+	client := &SessionClient{
+		Info: types.ClientInfo{
+			ClientID:   clientID,
+			JoinedAt:   now,
+			Approval:   approval,
+			LastPollAt: now,
+		},
+		conn:  newConnection(conn),
+		msgQs: make(map[types.WSMessageType][]interface{}),
+	}
+	return client
+}
+
 // Get the connection's send channel
 func (c *SessionClient) GetSendChan() chan []byte {
 	return c.conn.send
@@ -51,17 +66,25 @@ func (c *SessionClient) Send(mType types.WSMessageType, message interface{}) {
 	c.msgQs[mType] = q
 }
 
-// Get all chunks off the queue and remove them
-func (c *SessionClient) PopAllQueue(mType types.WSMessageType) []interface{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// Get all elements from a queue, but don't mutate them
+func (c *SessionClient) GetAllQueue(mType types.WSMessageType) []interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	q, ok := c.msgQs[types.WSMessageOutput]
 	if !ok {
 		return make([]interface{}, 0)
 	}
-	c.msgQs[types.WSMessageOutput] = make([]interface{}, 0)
 	return q
+}
+
+// Get all elements off the queue and remove them
+func (c *SessionClient) ClearAllQueue(mType types.WSMessageType) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, ok := c.msgQs[types.WSMessageOutput]; ok {
+		c.msgQs[types.WSMessageOutput] = make([]interface{}, 0)
+	}
 }
 
 // Close the underlying connection
@@ -83,11 +106,8 @@ type Session struct {
 	outputBuffer    []*types.OutputChunk
 	maxOutputBuffer int
 
-	// stdin is the ordered queue of all pending stdin entries
-	stdin []*types.StdinEntry
-
 	// host connection
-	hostConn *Connection
+	hostConn *SessionClient
 
 	// client connections
 	clients map[string]*SessionClient
@@ -102,8 +122,7 @@ func newSession(id string, maxOutputBuffer int, hostConn *websocket.Conn) *Sessi
 		},
 		outputBuffer:    make([]*types.OutputChunk, 0),
 		maxOutputBuffer: maxOutputBuffer,
-		stdin:           make([]*types.StdinEntry, 0),
-		hostConn:        newConnection(hostConn),
+		hostConn:        newSessionClient(types.HostClientID, types.ApprovalApproved, hostConn),
 		clients:         make(map[string]*SessionClient),
 	}
 }
@@ -156,13 +175,9 @@ func (s *Session) EnqueueStdin(data []byte) {
 	entry := types.StdinEntry{
 		Data: data,
 	}
-	s.stdin = append(s.stdin, &entry)
 
-	// Attempt to send to the host connection and clear if successful
-	if err := s.hostConn.SendMessage(types.WSMessageStdin, s.stdin); nil == err {
-		sessCh.Log(alog.DEBUG2, "Stdin sent to host. Purging from queue.")
-		s.stdin = make([]*types.StdinEntry, 0)
-	}
+	// Send to the host (enqueue if WS not connected)
+	s.hostConn.Send(types.WSMessageStdin, entry)
 }
 
 // Complete marks the session as completed with the given exit code.
@@ -179,28 +194,21 @@ func (s *Session) Complete(exitCode int) {
 func (s *Session) RegisterClient(conn *websocket.Conn) (string, *SessionClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
 	clientID := uuid.New().String()
-	client := &SessionClient{
-		Info: types.ClientInfo{
-			ClientID:   clientID,
-			JoinedAt:   now,
-			Approval:   types.ApprovalPending,
-			LastPollAt: now,
-		},
-		conn:  newConnection(conn),
-		msgQs: make(map[types.WSMessageType][]interface{}),
-	}
+	client := newSessionClient(clientID, types.ApprovalPending, conn)
 	s.clients[clientID] = client
 
-	// Notify the host of the pending client
-	s.hostConn.SendMessage(types.WSMessagePendingClient, clientID)
+	// Notify the host of the pending client if approval required
+	s.hostConn.Send(types.WSMessagePendingClient, clientID)
 
 	return clientID, client
 }
 
 // GetClient gets the client if available
 func (s *Session) GetClient(clientID string) *SessionClient {
+	if clientID == types.HostClientID {
+		return s.hostConn
+	}
 	if client, ok := s.clients[clientID]; ok {
 		return client
 	}
@@ -217,6 +225,10 @@ func (s *Session) ApproveClient(clientID string, perm types.Permission) error {
 	}
 	rec.Info.Approval = types.ApprovalApproved
 	rec.Info.Permission = perm
+
+	// Send the output buffer to the client
+	s.hostConn.Send(types.WSMessageOutput, s.outputBuffer)
+
 	return nil
 }
 
@@ -232,30 +244,21 @@ func (s *Session) DenyClient(clientID string) error {
 	return nil
 }
 
-// ListPendingClients returns all clients in pending approval state.
-func (s *Session) ListPendingClients() []*types.ClientInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var result []*types.ClientInfo
-	for _, rec := range s.clients {
-		if rec.Info.Approval == types.ApprovalPending {
-			cp := rec.Info
-			result = append(result, &cp)
-		}
+// PeekClientQueue peeks at a given message type's queue for a given client
+func (s *Session) PeekClientQueue(clientID string, mType types.WSMessageType) []interface{} {
+	client := s.GetClient(clientID)
+	if nil == client {
+		return make([]interface{}, 0)
 	}
-	return result
+	return client.GetAllQueue(mType)
 }
 
-// ListClients returns all client records.
-func (s *Session) ListClients() []*types.ClientInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := make([]*types.ClientInfo, 0, len(s.clients))
-	for _, rec := range s.clients {
-		cp := rec.Info
-		result = append(result, &cp)
+// ClearClientQueue clears all queued messages of a given type for a given
+// client
+func (s *Session) ClearClientQueue(clientID string, mType types.WSMessageType) {
+	if client := s.GetClient(clientID); nil != client {
+		client.ClearAllQueue(mType)
 	}
-	return result
 }
 
 // UpdateClientActivity updates the last poll timestamp for a client.

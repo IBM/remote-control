@@ -134,27 +134,6 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 				s.sendError(client, err.Error())
 			}
 
-		case types.WSMessageApproveClient:
-			wsHandlerCh.Log(alog.DEBUG3, "Received client approval: %v", msg)
-			if err := s.handleApproveClientWS(msg, client, sessionID, clientID); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "approve client error: %v", err)
-				s.sendError(client, err.Error())
-			}
-
-		case types.WSMessageDenyClient:
-			wsHandlerCh.Log(alog.DEBUG3, "Received client denial: %v", msg)
-			if err := s.handleDenyClientWS(client, sessionID, clientID); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "deny client error: %v", err)
-				s.sendError(client, err.Error())
-			}
-
-		//TODO: Re-enable stdin ack
-		// case types.WSMessageAckStdin:
-		// 	if err := s.handleStdinAckWS(connection, msg); err != nil {
-		// 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] stdin ack error: %v", err)
-		// 		s.sendError(client, err.Error())
-		// 	}
-
 		default:
 			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %s", msg.Type)
 			s.sendError(client, "unknown message type")
@@ -185,30 +164,6 @@ func (s *Server) handleStdinSubmitWS(msg types.WSMessage, client *session.Sessio
 		return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
 	}
 	status, resp := s.handleEnqueueStdin(sessionID, clientID, payload)
-	if status != http.StatusCreated {
-		s.sendErrorJSON(client, resp)
-		return fmt.Errorf("%v", resp)
-	}
-	return nil
-}
-
-// handleApproveClientWS processes client approval via WebSocket
-func (s *Server) handleApproveClientWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
-	payload, ok := msg.Message.(types.ApproveClientRequest)
-	if !ok {
-		return fmt.Errorf("Invalid ApproveClientRequest received for session %s / client %s", sessionID, clientID)
-	}
-	status, resp := s.handleApproveClient(sessionID, clientID, payload)
-	if status != http.StatusCreated {
-		s.sendErrorJSON(client, resp)
-		return fmt.Errorf("%v", resp)
-	}
-	return nil
-}
-
-// handleDenyClientWS processes client denial via WebSocket
-func (s *Server) handleDenyClientWS(client *session.SessionClient, sessionID, clientID string) error {
-	status, resp := s.handleDenyClient(sessionID, clientID)
 	if status != http.StatusCreated {
 		s.sendErrorJSON(client, resp)
 		return fmt.Errorf("%v", resp)
