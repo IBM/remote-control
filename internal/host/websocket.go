@@ -386,6 +386,10 @@ func (h *Host) pollPendingClients(ctx context.Context, sessionID string, rawMode
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Don't poll if websocket is connected
+			if h.wsHost.IsConnected() {
+				continue
+			}
 			mType := types.WSMessagePendingClient
 			resp, err := h.client.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, types.HostClientID))
 			if err != nil {
