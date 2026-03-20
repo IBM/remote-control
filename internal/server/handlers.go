@@ -106,7 +106,7 @@ func (s *Server) handleAppendOutput(id string, req types.AppendOutputRequest, co
 	// Decode the output data to bytes
 	if req.Stream != types.StreamStdout && req.Stream != types.StreamStderr {
 		return http.StatusBadRequest, types.ErrorResponse{
-			Error: fmt.Sprintf("stream must be %d (stdout) or %d (stderr)", types.StreamStdout, types.StreamStderr),
+			Error: fmt.Sprintf("stream must be %d (stdout) or %d (stderr). Got %d", types.StreamStdout, types.StreamStderr, req.Stream),
 		}
 	}
 
