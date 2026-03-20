@@ -88,7 +88,7 @@ func (c *APIClient) CreateSession(command []string) (string, error) {
 
 // AppendOutput sends a chunk of output to the server.
 func (c *APIClient) AppendOutput(sessionID string, stream types.Stream, data []byte, timestamp time.Time) error {
-	body := types.AppendOutputRequest{
+	body := types.OutputChunk{
 		Stream: stream,
 		Data:   data,
 	}

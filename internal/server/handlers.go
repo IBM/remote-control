@@ -87,8 +87,9 @@ func (s *Server) handlePatchSession(id string, req types.PatchSessionRequest) (i
 
 /* --- Output --------------------------------------------------------------- */
 
-func (s *Server) handleAppendOutput(id string, req types.AppendOutputRequest, conn *websocket.Conn) (int, interface{}) {
+func (s *Server) handleAppendOutput(id string, req types.OutputChunk, conn *websocket.Conn) (int, interface{}) {
 	handlerCh.Log(alog.DEBUG2, "Appending output for session %s", id)
+	handlerCh.Log(alog.DEBUG4, "Output: %v", req)
 	sess, err := s.store.Get(id)
 
 	// If session is unknown, create it. This allows a session to revive after

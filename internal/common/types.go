@@ -30,22 +30,30 @@ const (
 // OutputChunk is a single contiguous block of data from a subprocess output
 // stream.
 type OutputChunk struct {
+	Stream Stream
+	Data   []byte
+}
+
+type serializedOutputChunk struct {
 	Stream Stream `json:"stream"`
-	Data   []byte `json:"data"`
+	Data   string `json:"data"` // base64 encoded
 }
 
 func (c OutputChunk) MarshalJSON() ([]byte, error) {
-	s := base64.StdEncoding.EncodeToString(c.Data)
-	return json.Marshal(s)
+	return json.Marshal(serializedOutputChunk{
+		Stream: c.Stream,
+		Data:   base64.StdEncoding.EncodeToString(c.Data),
+	})
 }
 
 func (c *OutputChunk) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); nil != err {
+	var ser serializedOutputChunk
+	if err := json.Unmarshal(data, &ser); nil != err {
 		return err
-	} else if decoded, err := base64.StdEncoding.DecodeString(s); nil != err {
+	} else if decoded, err := base64.StdEncoding.DecodeString(ser.Data); nil != err {
 		return err
 	} else {
+		c.Stream = ser.Stream
 		c.Data = decoded
 		return nil
 	}
@@ -101,29 +109,6 @@ const HostClientID = "host"
 // CreateSessionRequest is the body for POST /sessions.
 type CreateSessionRequest struct {
 	ID string `json:"id,omitempty"`
-}
-
-// AppendOutputRequest is the body for POST /sessions/{id}/output.
-type AppendOutputRequest struct {
-	Stream Stream `json:"stream"` // 1 or 2
-	Data   []byte `json:"data"`   // Output bytes
-}
-
-func (r AppendOutputRequest) MarshalJSON() ([]byte, error) {
-	s := base64.StdEncoding.EncodeToString(r.Data)
-	return json.Marshal(s)
-}
-
-func (r *AppendOutputRequest) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); nil != err {
-		return err
-	} else if decoded, err := base64.StdEncoding.DecodeString(s); nil != err {
-		return err
-	} else {
-		r.Data = decoded
-		return nil
-	}
 }
 
 // PollResponse is the body for GET /sessions/{id}/{m_type}/poll
@@ -210,7 +195,7 @@ type WSMessage struct {
 // UnmarshalMessage unmarshals the Message field into the provided interface.
 // The caller should pass a pointer to the appropriate struct type.
 // Examples:
-//   - var payload types.AppendOutputRequest; msg.UnmarshalMessage(&payload)
+//   - var payload types.OutputChunk; msg.UnmarshalMessage(&payload)
 //   - var payload types.StdinRequest; msg.UnmarshalMessage(&payload)
 func (w *WSMessage) UnmarshalMessage(v interface{}) error {
 	return json.Unmarshal(w.Message, v)

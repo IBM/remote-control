@@ -252,7 +252,8 @@ func (wh *WebSocketHost) handleDisconnect(ctx context.Context) {
 
 // SendOutput sends output data via WebSocket
 func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte, offset int64, timestamp time.Time) error {
-	payload := types.AppendOutputRequest{
+	wsHostCh.Log(alog.DEBUG4, "sending output on stream %d: %v", stream, data)
+	payload := types.OutputChunk{
 		Stream: stream,
 		Data:   data,
 	}
@@ -261,6 +262,8 @@ func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte, offset int
 	if err != nil {
 		return err
 	}
+	wsHostCh.Log(alog.DEBUG4, "payload bytes: %v", payloadBytes)
+	wsHostCh.Log(alog.DEBUG4, "payload json: %s", payloadBytes)
 
 	msg := types.WSMessage{
 		Type:    types.WSMessageOutput,
@@ -271,6 +274,8 @@ func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte, offset int
 	if err != nil {
 		return err
 	}
+	wsHostCh.Log(alog.DEBUG4, "full bytes: %v", msgData)
+	wsHostCh.Log(alog.DEBUG4, "full json: %s", msgData)
 
 	select {
 	case wh.send <- msgData:

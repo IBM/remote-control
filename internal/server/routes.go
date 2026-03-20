@@ -81,7 +81,7 @@ func (s *Server) handlePatchSessionRoute(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAppendOutputRoute(w http.ResponseWriter, r *http.Request) {
 
-	var req types.AppendOutputRequest
+	var req types.OutputChunk
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 	}

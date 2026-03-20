@@ -105,6 +105,7 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 
 	for {
 		_, message, err := conn.ReadMessage()
+		wsHandlerCh.Log(alog.DEBUG4, "Received websocket bytes: %v", message)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				wsHandlerCh.Log(alog.DEBUG, "WebSocket read error: %v", err)
@@ -118,6 +119,7 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 			s.sendError(client, "invalid message format")
 			continue
 		}
+		wsHandlerCh.Log(alog.DEBUG4, "Payload bytes: %v", msg.Message)
 
 		// Handle message based on type
 		switch msg.Type {
@@ -146,9 +148,10 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 
 // handleAppendOutputWS processes output append messages via WebSocket
 func (s *Server) handleAppendOutputWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
-	var payload types.AppendOutputRequest
-	if err := msg.UnmarshalMessage(&payload); err != nil {
-		return fmt.Errorf("invalid AppendOutputRequest received for session %s / client %s: %v", sessionID, clientID, err)
+	var payload types.OutputChunk
+	wsHandlerCh.Log(alog.DEBUG4, "Unwrapping message: %s", msg.Message)
+	if err := json.Unmarshal(msg.Message, &payload); err != nil {
+		return fmt.Errorf("invalid OutputChunk received for session %s / client %s: %v", sessionID, clientID, err)
 	}
 	status, resp := s.handleAppendOutput(sessionID, payload, nil)
 	if status != http.StatusCreated && status != http.StatusNoContent {
