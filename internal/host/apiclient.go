@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // APIClient is an HTTP client for the remote-control server API.
@@ -23,6 +25,8 @@ func NewAPIClient(baseURL string, httpClient *http.Client) *APIClient {
 	}
 	return &APIClient{baseURL: baseURL, httpClient: httpClient}
 }
+
+/* -- Private Helpers ------------------------------------------------------- */
 
 func (c *APIClient) post(path string, body any) (*http.Response, error) {
 	data, err := json.Marshal(body)
@@ -64,6 +68,8 @@ func drainClose(resp *http.Response) {
 	}
 }
 
+/* -- Public ---------------------------------------------------------------- */
+
 // CreateSession creates a new session on the server and returns its ID.
 func (c *APIClient) CreateSession(command []string) (string, error) {
 	resp, err := c.post("/sessions", map[string]any{})
@@ -81,11 +87,10 @@ func (c *APIClient) CreateSession(command []string) (string, error) {
 }
 
 // AppendOutput sends a chunk of output to the server.
-func (c *APIClient) AppendOutput(sessionID string, stream string, data []byte, timestamp time.Time) error {
-	body := map[string]string{
-		"stream":    stream,
-		"data":      base64.StdEncoding.EncodeToString(data),
-		"timestamp": timestamp.Format(time.RFC3339Nano),
+func (c *APIClient) AppendOutput(sessionID string, stream types.Stream, data []byte, timestamp time.Time) error {
+	body := types.AppendOutputRequest{
+		Stream: stream,
+		Data:   data,
 	}
 	resp, err := c.post("/sessions/"+sessionID+"/output", body)
 	if err != nil {
@@ -99,55 +104,50 @@ func (c *APIClient) AppendOutput(sessionID string, stream string, data []byte, t
 }
 
 // EnqueueStdin sends stdin data to the server queue.
-func (c *APIClient) EnqueueStdin(sessionID, source string, data []byte) (string, error) {
-	body := map[string]string{
-		"source": source,
-		"data":   base64.StdEncoding.EncodeToString(data),
-	}
+func (c *APIClient) EnqueueStdin(sessionID, source string, data []byte) error {
+	body := types.StdinRequest{Data: base64.StdEncoding.EncodeToString(data)}
 	resp, err := c.post("/sessions/"+sessionID+"/stdin", body)
-	if err != nil {
-		return "", err
-	}
-	defer drainClose(resp)
-	var result struct {
-		ID string `json:"id"`
-	}
-	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
-}
-
-// PeekStdin returns the oldest pending stdin entry, or nil if none.
-func (c *APIClient) PeekStdin(sessionID string) (*PendingStdin, error) {
-	resp, err := c.get("/sessions/" + sessionID + "/stdin")
-	if err != nil {
-		return nil, err
-	}
-	defer drainClose(resp)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("peek stdin: server returned %d", resp.StatusCode)
-	}
-	var result PendingStdin
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-// PendingStdin is a pending stdin entry returned from the server.
-type PendingStdin struct {
-	ID     uint64 `json:"id"`
-	Source string `json:"source"`
-	Data   string `json:"data"` // base64
-}
-
-// AckStdin marks a stdin entry as processed.
-func (c *APIClient) AckStdin(sessionID string, entryID uint64) error {
-	resp, err := c.post("/sessions/"+sessionID+"/stdin/ack", map[string]uint64{"id": entryID})
 	if err != nil {
 		return err
 	}
-	drainClose(resp)
+	defer drainClose(resp)
 	return nil
 }
+
+// TODO: re-enable stdin ack
+// // PeekStdin returns the oldest pending stdin entry, or nil if none.
+// func (c *APIClient) PeekStdin(sessionID string) (*PendingStdin, error) {
+// 	resp, err := c.get("/sessions/" + sessionID + "/stdin")
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	defer drainClose(resp)
+// 	if resp.StatusCode != http.StatusOK {
+// 		return nil, fmt.Errorf("peek stdin: server returned %d", resp.StatusCode)
+// 	}
+// 	var result PendingStdin
+// 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+// 		return nil, err
+// 	}
+// 	return &result, nil
+// }
+//
+// // PendingStdin is a pending stdin entry returned from the server.
+// type PendingStdin struct {
+// 	ID     uint64 `json:"id"`
+// 	Source string `json:"source"`
+// 	Data   string `json:"data"` // base64
+// }
+//
+// // AckStdin marks a stdin entry as processed.
+// func (c *APIClient) AckStdin(sessionID string, entryID uint64) error {
+// 	resp, err := c.post("/sessions/"+sessionID+"/stdin/ack", map[string]uint64{"id": entryID})
+// 	if err != nil {
+// 		return err
+// 	}
+// 	drainClose(resp)
+// 	return nil
+// }
 
 // CompleteSession marks the session as completed with the given exit code.
 func (c *APIClient) CompleteSession(sessionID string, exitCode int) error {
@@ -170,22 +170,17 @@ func (c *APIClient) DeleteSession(sessionID string) error {
 }
 
 // ListPendingClients returns clients waiting for approval.
-func (c *APIClient) ListPendingClients(sessionID string) ([]PendingClient, error) {
+func (c *APIClient) ListPendingClients(sessionID string) ([]types.ClientInfo, error) {
 	resp, err := c.get("/sessions/" + sessionID + "/clients?status=pending")
 	if err != nil {
 		return nil, err
 	}
 	defer drainClose(resp)
-	var clients []PendingClient
+	var clients []types.ClientInfo
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
 		return nil, err
 	}
 	return clients, nil
-}
-
-// PendingClient describes a client waiting for host approval.
-type PendingClient struct {
-	ClientID string `json:"client_id"`
 }
 
 // ApproveClient approves a client with the given permission.
@@ -207,21 +202,4 @@ func (c *APIClient) DenyClient(sessionID, clientID string) error {
 	}
 	drainClose(resp)
 	return nil
-}
-
-// SubmitHostStdin submits host stdin entries through the server queue.
-func (c *APIClient) SubmitHostStdin(sessionID string, data []byte) (string, error) {
-	body := map[string]string{
-		"source": "host",
-		"data":   base64.StdEncoding.EncodeToString(data),
-	}
-	resp, err := c.post("/sessions/"+sessionID+"/stdin", body)
-	if err != nil {
-		return "", err
-	}
-	defer drainClose(resp)
-	var result struct {
-		ID string `json:"id"`
-	}
-	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
 }

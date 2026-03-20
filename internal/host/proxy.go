@@ -3,8 +3,6 @@ package host
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // syncWriter wraps an io.Writer with a mutex so concurrent writes are safe.
@@ -38,7 +37,7 @@ func (sw *syncWriter) Close() error {
 // forwards each chunk to the server as timestamped output.
 // stream is "stdout" or "stderr".
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
-func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *APIClient, sessionID, stream string, wsHost *WebSocketHost) {
+func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *APIClient, sessionID string, stream types.Stream, wsHost *WebSocketHost) {
 	var offset int64
 	var offsetMu sync.Mutex
 
@@ -120,7 +119,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 				*offset += int64(n)
 				offsetMu.Unlock()
 
-				if serr := wsHost.SendOutput("stdout", chunk, currentOffset, ts); serr != nil {
+				if serr := wsHost.SendOutput(types.StreamStdout, chunk, currentOffset, ts); serr != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
 				}
 			} else if client != nil {
@@ -128,7 +127,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 				case <-ctx.Done():
 					return
 				default:
-					if serr := client.AppendOutput(sessionID, "stdout", chunk, ts); serr != nil {
+					if serr := client.AppendOutput(sessionID, types.StreamStdout, chunk, ts); serr != nil {
 						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
 				}
@@ -150,9 +149,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *APICli
 	}
 }
 
-// processHostStdinEntry submits a host stdin entry to the server queue.
-// For PTY mode, the entry is written directly before submission to avoid echo loop.
-// If wsHost is available, uses WebSocket to submit; otherwise uses HTTP polling.
+// processHostStdinEntry submits host stdin data via WebSocket or HTTP fallback
 func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *APIClient, sessionID string, writeDirectly bool, ptmx *os.File, ptmxMu *sync.Mutex, wsHost *WebSocketHost) error {
 	// Write directly to PTY before submission for immediate terminal echo
 	if writeDirectly && ptmx != nil {
@@ -161,14 +158,16 @@ func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *A
 		ptmxMu.Unlock()
 	}
 
-	// Submit to server queue for client visibility (prefer WebSocket, fallback to HTTP)
+	// Send to server via WebSocket if connected, otherwise HTTP
 	if wsHost != nil && wsHost.IsConnected() {
-		if err := wsHost.SubmitStdin(data); err != nil {
-			wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket submit stdin error: %v", err)
+		if err := wsHost.SendStdinSubmit(data); err != nil {
+			wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send stdin error: %v", err)
+			return err
 		}
 	} else if client != nil {
-		if _, err := client.SubmitHostStdin(sessionID, data); err != nil {
-			ch.Log(alog.DEBUG, "[remote-control] host stdin enqueue error: %v", err)
+		if err := client.EnqueueStdin(sessionID, "host", data); err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] enqueue stdin error: %v", err)
+			return err
 		}
 	}
 
@@ -231,7 +230,8 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 
 			lineWithNewline := append(res.line, '\n')
 
-			// Submit through server queue, wait for acceptance, then write
+			// Submit directly to stdin
+			// TODO: This is not right!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, true, nil, nil, nil)
 			if writeErr != nil {
 				ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
@@ -319,74 +319,48 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 	}
 }
 
-// processServerStdinEntry accepts a pending entry from the server and writes
-// it to the subprocess. Only writes client entries; skips host entries to
-// avoid echo loop since they were already written directly to PTY.
-func (h *Host) processServerStdinEntry(ctx context.Context, client *APIClient, sessionID string, writeFunc func([]byte) error) error {
-	entry, err := client.PeekStdin(sessionID)
-	if err != nil {
-		ch.Log(alog.DEBUG, "[remote-control] peek stdin error: %v", err)
-		return err
-	}
-	if entry == nil || entry.ID == 0 {
-		ch.Log(alog.DEBUG2, "[remote-control] no stdin found")
+// processServerStdinEntryFromCallback handles a stdin entry received from the server via WebSocket.
+// Only writes client entries; skips host entries to avoid echo loop since they were already written directly to PTY.
+func (h *Host) processServerStdinEntryFromCallback(ctx context.Context, entry types.StdinEntry, writeFunc func([]byte) error) error {
+	// Skip empty data
+	if len(entry.Data) == 0 {
 		return nil
 	}
 
-	// Accept the entry
-	if err := client.AckStdin(sessionID, entry.ID); err != nil {
-		ch.Log(alog.DEBUG, "[remote-control] accept stdin error: %v", err)
-		return err
-	}
-	ch.Log(alog.DEBUG2, "[remote-control] Ack'ed stdin: %d", entry.ID)
-
-	// If the data is invalid, it's already ack'ed on the server, so just return
-	data, err := base64.StdEncoding.DecodeString(entry.Data)
-	if err != nil || len(data) == 0 {
-		return fmt.Errorf("invalid entry data")
-	}
-
 	// Write client entries to subprocess
-	return writeFunc(data)
+	return writeFunc(entry.Data)
 }
 
-// proxyServerStdin polls the server for pending stdin entries and processes
-// them. Runs in parallel with proxyLocalStdin in pipe mode.
+// proxyServerStdin handles server stdin entries.
+// When WebSocket is connected, stdin comes via WebSocket callbacks.
+// When WebSocket is disconnected, falls back to polling.
 func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, client *APIClient, sessionID string) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			err := h.processServerStdinEntry(ctx, client, sessionID, func(data []byte) error {
-				_, err := stdinPipe.Write(data)
-				return err
-			})
-			// Silently ignore "no pending" or processing errors
-			_ = err
-		}
+	// If WebSocket is connected, stdin entries are handled via callbacks
+	// If WebSocket is disconnected, we can poll for queued stdin entries
+	if h.wsHost == nil || !h.wsHost.IsConnected() {
+		h.pollStdin(ctx, sessionID, func(data []byte) error {
+			_, err := stdinPipe.Write(data)
+			return err
+		})
+	} else {
+		// Wait for WebSocket callbacks
+		<-ctx.Done()
 	}
 }
 
 // proxyServerStdinPTY is the PTY variant of proxyServerStdin.
 func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *APIClient, sessionID string) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = h.processServerStdinEntry(ctx, client, sessionID, func(data []byte) error {
-				ptmxMu.Lock()
-				defer ptmxMu.Unlock()
-				_, err := ptmx.Write(data)
-				return err
-			})
-		}
+	// If WebSocket is connected, stdin entries are handled via callbacks
+	// If WebSocket is disconnected, falls back to polling
+	if h.wsHost == nil || !h.wsHost.IsConnected() {
+		h.pollStdin(ctx, sessionID, func(data []byte) error {
+			ptmxMu.Lock()
+			defer ptmxMu.Unlock()
+			_, err := ptmx.Write(data)
+			return err
+		})
+	} else {
+		// Wait for WebSocket callbacks
+		<-ctx.Done()
 	}
 }

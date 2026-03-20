@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,6 +18,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 )
@@ -269,13 +269,13 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout", h.wsHost)
+		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, types.StreamStdout, h.wsHost)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, "stderr", h.wsHost)
+		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, types.StreamStderr, h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -352,19 +352,25 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 		return
 	}
 
-	// Derive WebSocket URL from ServerURL
-	wsURL := h.deriveWebSocketURL(h.cfg.ServerURL)
-
 	// Build TLS config if available
 	tlsCfg := buildTLSConfig(h.cfg)
 
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, "host")
+	h.wsHost = NewWebSocketHost(h.cfg.ServerURL, tlsCfg, sessionID, types.HostClientID)
 
-	// Set up stdin pending handler
-	h.wsHost.OnStdinPending(func(entry StdinEntry) {
-		// WebSocket will broadcast pending stdin entries
-		// This will replace the polling mechanism
+	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
+	h.wsHost.OnPendingClient(func(clientID string) {
+		if !h.cfg.RequireApproval {
+			return
+		}
+		h.handleClientApproval(ctx, sessionID, clientID, true)
+	})
+
+	// Set up stdin handler - receives stdin from other clients via WebSocket
+	h.wsHost.OnStdin(func(entry types.StdinEntry) {
+		// stdin from other clients is handled in proxyServerStdin
+		// this callback is kept for potential future use
+		_ = entry
 	})
 
 	// Set up error handler
@@ -379,27 +385,19 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	}
 }
 
-// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
-func (h *Host) deriveWebSocketURL(httpURL string) string {
-	parsed, err := url.Parse(httpURL)
-	if err != nil {
-		return httpURL
-	}
-
-	if parsed.Scheme == "https" {
-		parsed.Scheme = "wss"
-	} else if parsed.Scheme == "http" {
-		parsed.Scheme = "ws"
-	}
-
-	return parsed.String()
-}
-
-// closeWebSocket gracefully closes the WebSocket connection.
 func (h *Host) closeWebSocket() {
 	if h.wsHost != nil {
 		h.wsHost.Close()
 	}
+}
+
+// pollClientApprovals handles client approval notifications.
+// Uses WebSocket callbacks when connected, HTTP polling as fallback.
+func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
+	// Always use the poll/ack fallback for client approvals
+	// WebSocket callbacks are handled by the WebSocket readPump
+	_ = rawMode
+	h.pollPendingClients(ctx, sessionID, rawMode)
 }
 
 // armApprovalChannel marks the host as waiting for an approval byte and returns
@@ -421,32 +419,6 @@ func (h *Host) disarmApprovalChannel() {
 	h.approvalActive = false
 	h.approvalRespCh = nil
 	h.approvalMu.Unlock()
-}
-
-// pollClientApprovals polls the server for pending client join requests and
-// prompts the host user (via side-channel) to approve or deny each one.
-func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !h.cfg.RequireApproval {
-				continue
-			}
-			clients, err := h.client.ListPendingClients(sessionID)
-			if err != nil {
-				ch.Log(alog.DEBUG, "[remote-control] list pending clients error: %v", err)
-				continue
-			}
-			for _, client := range clients {
-				h.handleClientApproval(ctx, sessionID, client.ClientID, rawMode)
-			}
-		}
-	}
 }
 
 // handleClientApproval prompts the host user to approve or deny a client.
