@@ -215,33 +215,25 @@ func (wh *WebSocketHost) handleMessage(msg types.WSMessage) {
 	switch msg.Type {
 	case types.WSMessageStdin:
 		if onStdin != nil {
-			if dataBytes, ok := msg.Message.([]byte); ok {
-				var entry types.StdinEntry
-				if err := json.Unmarshal(dataBytes, &entry); err == nil {
-					onStdin(entry)
-				}
+			var entry types.StdinEntry
+			if err := msg.UnmarshalMessage(&entry); err == nil {
+				onStdin(entry)
 			}
 		}
 
 	case types.WSMessagePendingClient:
 		if onPendingClient != nil {
-			if clientIDStr, ok := msg.Message.(string); ok {
-				onPendingClient(clientIDStr)
-			} else if clientMap, ok := msg.Message.(map[string]interface{}); ok {
-				if clientID, ok := clientMap["client_id"].(string); ok {
-					onPendingClient(clientID)
-				}
+			var clientID string
+			if err := msg.UnmarshalMessage(&clientID); err == nil {
+				onPendingClient(clientID)
 			}
 		}
 
 	case types.WSMessageError:
 		var errMsg string
-		if errBytes, ok := msg.Message.([]byte); ok {
-			errMsg = string(errBytes)
-		} else if errStr, ok := msg.Message.(string); ok {
-			errMsg = errStr
+		if err := msg.UnmarshalMessage(&errMsg); err == nil {
+			wsHostCh.Log(alog.DEBUG, "[remote-control] server error: %s", errMsg)
 		}
-		wsHostCh.Log(alog.DEBUG, "[remote-control] server error: %s", errMsg)
 	}
 }
 
@@ -260,12 +252,19 @@ func (wh *WebSocketHost) handleDisconnect(ctx context.Context) {
 
 // SendOutput sends output data via WebSocket
 func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte, offset int64, timestamp time.Time) error {
+	payload := types.AppendOutputRequest{
+		Stream: stream,
+		Data:   data,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
 	msg := types.WSMessage{
-		Type: types.WSMessageOutput,
-		Message: types.AppendOutputRequest{
-			Stream: stream,
-			Data:   data,
-		},
+		Type:    types.WSMessageOutput,
+		Message: payloadBytes,
 	}
 
 	msgData, err := json.Marshal(msg)
@@ -288,9 +287,15 @@ func (wh *WebSocketHost) SendStdinSubmit(data []byte) error {
 	// Encode as base64 for JSON transport
 	encoded := base64.StdEncoding.EncodeToString(data)
 
+	payload := types.StdinRequest{Data: encoded}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
 	msg := types.WSMessage{
 		Type:    types.WSMessageStdin,
-		Message: types.StdinRequest{Data: encoded},
+		Message: payloadBytes,
 	}
 
 	msgData, err := json.Marshal(msg)

@@ -200,7 +200,18 @@ func GetWSMessageType(n int) WSMessageType {
 }
 
 // Generic wrapper for a WebSocket message with type and serialized json
+// Using json.RawMessage for Message allows proper type-specific unmarshaling
+// by avoiding the map[string]interface{} conversion that happens with interface{}
 type WSMessage struct {
-	Type    WSMessageType `json:"type"`
-	Message interface{}   `json:"message"`
+	Type    WSMessageType   `json:"type"`
+	Message json.RawMessage `json:"message"`
+}
+
+// UnmarshalMessage unmarshals the Message field into the provided interface.
+// The caller should pass a pointer to the appropriate struct type.
+// Examples:
+//   - var payload types.AppendOutputRequest; msg.UnmarshalMessage(&payload)
+//   - var payload types.StdinRequest; msg.UnmarshalMessage(&payload)
+func (w *WSMessage) UnmarshalMessage(v interface{}) error {
+	return json.Unmarshal(w.Message, v)
 }

@@ -122,21 +122,21 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 		// Handle message based on type
 		switch msg.Type {
 		case types.WSMessageOutput:
-			wsHandlerCh.Log(alog.DEBUG3, "Received output: %v", msg)
-			if err := s.handleAppendOutputWS(msg, conn, client, sessionID, clientID); err != nil {
+			wsHandlerCh.Log(alog.DEBUG3, "Received output")
+			if err := s.handleAppendOutputWS(msg, client, sessionID, clientID); err != nil {
 				wsHandlerCh.Log(alog.DEBUG, "output append error: %v", err)
 				s.sendError(client, err.Error())
 			}
 
 		case types.WSMessageStdin:
-			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit: %v", msg)
+			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit")
 			if err := s.handleStdinSubmitWS(msg, client, sessionID, clientID); err != nil {
 				wsHandlerCh.Log(alog.DEBUG, "stdin submit error: %v", err)
 				s.sendError(client, err.Error())
 			}
 
 		default:
-			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %s", msg.Type)
+			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %d", msg.Type)
 			s.sendError(client, "unknown message type")
 		}
 	}
@@ -145,12 +145,12 @@ func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, s
 /* -- Handlers -------------------------------------------------------------- */
 
 // handleAppendOutputWS processes output append messages via WebSocket
-func (s *Server) handleAppendOutputWS(msg types.WSMessage, conn *websocket.Conn, client *session.SessionClient, sessionID, clientID string) error {
-	payload, ok := msg.Message.(types.AppendOutputRequest)
-	if !ok {
-		return fmt.Errorf("Invalid AppendOutputRequest received for session %s / client %s", sessionID, clientID)
+func (s *Server) handleAppendOutputWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
+	var payload types.AppendOutputRequest
+	if err := msg.UnmarshalMessage(&payload); err != nil {
+		return fmt.Errorf("invalid AppendOutputRequest received for session %s / client %s: %v", sessionID, clientID, err)
 	}
-	status, resp := s.handleAppendOutput(sessionID, payload, conn)
+	status, resp := s.handleAppendOutput(sessionID, payload, nil)
 	if status != http.StatusCreated && status != http.StatusNoContent {
 		s.sendErrorJSON(client, resp)
 		return fmt.Errorf("%v", resp)
@@ -160,22 +160,14 @@ func (s *Server) handleAppendOutputWS(msg types.WSMessage, conn *websocket.Conn,
 
 // handleStdinSubmitWS processes stdin submit messages via WebSocket
 func (s *Server) handleStdinSubmitWS(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) error {
-	// The message can be either StdinRequest (binary data) or StdinEntry
-	var data []byte
+	var payload types.StdinRequest
+	if err := msg.UnmarshalMessage(&payload); err != nil {
+		return fmt.Errorf("invalid StdinRequest received for session %s / client %s: %v", sessionID, clientID, err)
+	}
 
-	// Try StdinRequest first
-	if req, ok := msg.Message.(map[string]interface{}); ok {
-		if dataStr, ok := req["data"].(string); ok {
-			var err error
-			data, err = base64.StdEncoding.DecodeString(dataStr)
-			if err != nil {
-				return fmt.Errorf("Invalid StdinRequest received for session %s / client %s: %v", sessionID, clientID, err)
-			}
-		} else {
-			return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
-		}
-	} else {
-		return fmt.Errorf("Invalid StdinRequest received for session %s / client %s", sessionID, clientID)
+	data, err := base64.StdEncoding.DecodeString(payload.Data)
+	if err != nil {
+		return fmt.Errorf("invalid base64 data in stdin request: %v", err)
 	}
 
 	status, resp := s.handleEnqueueStdin(sessionID, clientID, types.StdinRequest{Data: string(data)})

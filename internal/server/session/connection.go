@@ -32,31 +32,36 @@ func newConnection(conn *websocket.Conn) *Connection {
 
 // Send a serialized message to the client
 func (c *Connection) SendMessage(mType types.WSMessageType, message interface{}) error {
-
 	if nil == c.conn {
-		return fmt.Errorf("No websocket")
+		return fmt.Errorf("no websocket")
+	}
+
+	// Serialize the message payload first
+	payloadBytes, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %v", err)
 	}
 
 	// Wrap in the WSMessage envelope
 	wsMsg := types.WSMessage{
 		Type:    mType,
-		Message: message,
+		Message: payloadBytes,
 	}
 
 	// Serialize to the WS wire format
 	data, err := json.Marshal(wsMsg)
-	if nil != err {
-		return fmt.Errorf("Json marshal error: %v", err)
+	if err != nil {
+		return fmt.Errorf("failed to serialize WebSocket message: %v", err)
 	}
 
 	select {
 	case c.send <- data:
 		return nil
 	case <-c.done:
-		return fmt.Errorf("Connection closed, unable to send")
+		return fmt.Errorf("connection closed, unable to send")
 	default:
 		// Channel full, drop message
-		return fmt.Errorf("Connection full, unable to send")
+		return fmt.Errorf("connection full, unable to send")
 	}
 }
 
