@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net/url"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -42,22 +41,6 @@ func (wc *WebSocketClient) connectWebSocket(ctx context.Context, clientID string
 	wc.ws = NewWebSocketHost(wsURL, tlsCfg, wc.session, clientID)
 
 	return wc.ws.Connect(ctx)
-}
-
-// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
-func deriveWebSocketURL(httpURL string) string {
-	parsed, err := url.Parse(httpURL)
-	if err != nil {
-		return httpURL
-	}
-
-	if parsed.Scheme == "https" {
-		parsed.Scheme = "wss"
-	} else if parsed.Scheme == "http" {
-		parsed.Scheme = "ws"
-	}
-
-	return parsed.String()
 }
 
 // Connect initializes the WebSocket connection

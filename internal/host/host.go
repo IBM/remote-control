@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -40,7 +41,7 @@ type Host struct {
 
 	// PTY-mode subprocess management.
 	// subprocessPid is set once in runPTY before goroutines start; safe to read
-	// without synchronisation (goroutine-start provides the happens-before edge).
+	// without synchronization (goroutine-start provides the happens-before edge).
 	subprocessPid int
 	// pauseOutput suppresses PTY→stdout forwarding during approval prompts so
 	// that the subprocess's TUI cannot re-render over the prompt text.
@@ -355,8 +356,12 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	// Build TLS config if available
 	tlsCfg := buildTLSConfig(h.cfg)
 
+	// Derive WebSocket URL from ServerURL
+	wsURL := deriveWebSocketURL(h.cfg.ServerURL)
+	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
+
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(h.cfg.ServerURL, tlsCfg, sessionID, types.HostClientID)
+	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, types.HostClientID)
 
 	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
 	h.wsHost.OnPendingClient(func(clientID string) {
@@ -391,8 +396,34 @@ func (h *Host) closeWebSocket() {
 	}
 }
 
+// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
+// It strips any existing path and query parameters since the WebSocket path is constructed separately
+func deriveWebSocketURL(httpURL string) string {
+	parsed, err := url.Parse(httpURL)
+	if err != nil {
+		return httpURL
+	}
+
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	case "http":
+		parsed.Scheme = "ws"
+	default:
+		// Return as-is if already ws/wss or unknown
+		return httpURL
+	}
+
+	// Reset path and query - the caller will add /ws/{sessionID}
+	parsed.Path = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return parsed.String()
+}
+
 // pollClientApprovals handles client approval notifications.
-// Uses WebSocket callbacks when connected, HTTP polling as fallback.
+// Uses HTTP polling as fallback when WebSocket is disconnected.
 func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
 	// Always use the poll/ack fallback for client approvals
 	// WebSocket callbacks are handled by the WebSocket readPump
