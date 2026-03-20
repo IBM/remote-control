@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"time"
 )
 
@@ -31,6 +32,23 @@ const (
 type OutputChunk struct {
 	Stream Stream `json:"stream"`
 	Data   []byte `json:"data"`
+}
+
+func (c OutputChunk) MarshalJSON() ([]byte, error) {
+	s := base64.StdEncoding.EncodeToString(c.Data)
+	return json.Marshal(s)
+}
+
+func (c *OutputChunk) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); nil != err {
+		return err
+	} else if decoded, err := base64.StdEncoding.DecodeString(s); nil != err {
+		return err
+	} else {
+		c.Data = decoded
+		return nil
+	}
 }
 
 // StdinEntry is a single unit of stdin data submitted by a client or the host.
@@ -75,6 +93,9 @@ type SessionInfo struct {
 	ExitCode    *int       `json:"exit_code,omitempty"`
 }
 
+// Stand-in ClientID for the host's client connection
+const HostClientID = "host"
+
 /* -- Synchronous Request/Response Messages --------------------------------- */
 
 // CreateSessionRequest is the body for POST /sessions.
@@ -82,39 +103,32 @@ type CreateSessionRequest struct {
 	ID string `json:"id,omitempty"`
 }
 
-// SessionResponse is returned by session CRUD endpoints.
-type SessionResponse struct {
-	ID          string     `json:"id"`
-	Status      int        `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	ExitCode    *int       `json:"exit_code,omitempty"`
-}
-
 // AppendOutputRequest is the body for POST /sessions/{id}/output.
 type AppendOutputRequest struct {
 	Stream Stream `json:"stream"` // 1 or 2
-	Data   string `json:"data"`   // base64-encoded bytes
+	Data   []byte `json:"data"`   // Output bytes
 }
 
-func (r *AppendOutputRequest) Decode() (Stream, []byte, error) {
+func (r AppendOutputRequest) MarshalJSON() ([]byte, error) {
+	s := base64.StdEncoding.EncodeToString(r.Data)
+	return json.Marshal(s)
+}
 
-	if data, err := base64.StdEncoding.DecodeString(r.Data); nil != err {
-		return StreamUnknown, nil, err
+func (r *AppendOutputRequest) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); nil != err {
+		return err
+	} else if decoded, err := base64.StdEncoding.DecodeString(s); nil != err {
+		return err
 	} else {
-		return r.Stream, data, nil
+		r.Data = decoded
+		return nil
 	}
 }
 
-// OutputChunkResponse is a single chunk in the poll response.
-type OutputChunkResponse struct {
-	Stream string `json:"stream"`
-	Data   string `json:"data"` // base64-encoded
-}
-
-// PollOutputResponse is returned by GET /sessions/{id}/output.
-type PollOutputResponse struct {
-	Chunks []OutputChunkResponse `json:"chunks"`
+// PollResponse is the body for GET /sessions/{id}/{m_type}/poll
+type PollResponse struct {
+	Elements interface{} `json:"elements"`
 }
 
 // PatchSessionRequest is the body for PATCH /sessions/{id}.
@@ -169,18 +183,24 @@ const (
 	// client -> host
 	WSMessageStdin WSMessageType = 20
 
-	// host -> server
-	WSMessageApproveClient WSMessageType = 30
-	WSMessageDenyClient    WSMessageType = 31
-	// TODO: Re-enable stdin ack
-	// WSMessageAckStdin      WSMessageType = 32
-
 	// server -> host
-	WSMessagePendingClient WSMessageType = 40
+	WSMessagePendingClient WSMessageType = 30
 
 	// server responses
-	WSMessageError WSMessageType = 50
+	WSMessageError WSMessageType = 40
 )
+
+func GetWSMessageType(n int) WSMessageType {
+	t := WSMessageType(n)
+	switch t {
+	case WSMessageOutput:
+	case WSMessageStdin:
+	case WSMessagePendingClient:
+	case WSMessageError:
+		return t
+	}
+	return WSMessageUnknown
+}
 
 // Generic wrapper for a WebSocket message with type and serialized json
 type WSMessage struct {
