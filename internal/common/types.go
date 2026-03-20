@@ -193,10 +193,7 @@ const (
 func GetWSMessageType(n int) WSMessageType {
 	t := WSMessageType(n)
 	switch t {
-	case WSMessageOutput:
-	case WSMessageStdin:
-	case WSMessagePendingClient:
-	case WSMessageError:
+	case WSMessageOutput, WSMessageStdin, WSMessagePendingClient, WSMessageError:
 		return t
 	}
 	return WSMessageUnknown
