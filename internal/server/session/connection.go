@@ -39,7 +39,7 @@ func (c *Connection) SendMessage(mType types.WSMessageType, message interface{})
 
 	// Wrap in the WSMessage envelope
 	wsMsg := types.WSMessage{
-		Type:    types.WSMessageOutput,
+		Type:    mType,
 		Message: message,
 	}
 
@@ -62,9 +62,6 @@ func (c *Connection) SendMessage(mType types.WSMessageType, message interface{})
 
 // Close the connection
 func (c *Connection) Close() {
-	if nil == c.conn {
-		return
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -74,6 +71,8 @@ func (c *Connection) Close() {
 	default:
 		close(c.done)
 		close(c.send)
-		c.conn.Close()
+		if c.conn != nil {
+			c.conn.Close()
+		}
 	}
 }
