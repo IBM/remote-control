@@ -70,7 +70,7 @@ func (c *SessionClient) Send(mType types.WSMessageType, message interface{}) {
 func (c *SessionClient) GetAllQueue(mType types.WSMessageType) []interface{} {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	q, ok := c.msgQs[types.WSMessageOutput]
+	q, ok := c.msgQs[mType]
 	if !ok {
 		return make([]interface{}, 0)
 	}
@@ -82,8 +82,8 @@ func (c *SessionClient) ClearAllQueue(mType types.WSMessageType) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, ok := c.msgQs[types.WSMessageOutput]; ok {
-		c.msgQs[types.WSMessageOutput] = make([]interface{}, 0)
+	if _, ok := c.msgQs[mType]; ok {
+		c.msgQs[mType] = make([]interface{}, 0)
 	}
 }
 
@@ -172,8 +172,13 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 func (s *Session) EnqueueStdin(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Copy data to avoid external mutations
+	dataCopy := make([]byte, len(data))
+	copy(dataCopy, data)
+
 	entry := types.StdinEntry{
-		Data: data,
+		Data: dataCopy,
 	}
 
 	// Send to the host (enqueue if WS not connected)
