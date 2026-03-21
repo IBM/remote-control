@@ -28,8 +28,8 @@ func (s *Server) registerRoutes() {
 	mux.HandleFunc("POST /sessions/{id}/stdin", s.handleEnqueueStdinRoute)
 
 	// Poll / Ack
-	mux.HandleFunc("GET / sessions/{id}/{m_type}/poll", s.handlePollRoute)
-	mux.HandleFunc("GET / sessions/{id}/{m_type}/ack", s.handleAckRoute)
+	mux.HandleFunc("GET /sessions/{id}/{m_type}/poll", s.handlePollRoute)
+	mux.HandleFunc("GET /sessions/{id}/{m_type}/ack", s.handleAckRoute)
 
 	// Approval
 	mux.HandleFunc("POST /sessions/{id}/clients", s.handleRegisterClientRoute)

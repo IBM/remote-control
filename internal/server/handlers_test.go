@@ -795,4 +795,13 @@ func TestHandleEnqueueStdinReadOnlyDenied(t *testing.T) {
 	sess, _ := srv.store.Get(created.ID)
 	sess.ApproveClient(clientID, types.PermissionReadOnly)
 
-	data := base64.StdEncoding.EncodeToString([]byte(
+	data := base64.StdEncoding.EncodeToString([]byte("test"))
+
+	resp := postJSON(t, ts, "/sessions/"+created.ID+"/stdin?client_id="+clientID, types.StdinRequest{
+		Data: data,
+	})
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
