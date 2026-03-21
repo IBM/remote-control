@@ -96,7 +96,11 @@ func (wh *WebSocketHost) Connect(ctx context.Context) error {
 		dialer.TLSClientConfig = wh.tlsConfig
 	}
 
-	conn, _, err := dialer.Dial(wh.url+"/ws/"+wh.sessionID, nil)
+	wsURL := wh.url + "/ws/" + wh.sessionID
+	if wh.clientID != "" {
+		wsURL += "?client_id=" + wh.clientID
+	}
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("WebSocket dial failed: %w", err)
 	}

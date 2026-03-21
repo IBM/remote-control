@@ -150,7 +150,9 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 // handleRegisterClient handles POST /sessions/{id}/clients.
 // Server generates a unique client ID and returns it to the client.
 func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Request) {
-	status, resp := s.handleRegisterClient(r.PathValue("id"), nil)
+	// Get client_id query parameter
+	clientID := r.URL.Query().Get("client_id")
+	status, resp := s.handleRegisterClient(r.PathValue("id"), clientID, nil)
 	writeJSON(w, status, resp)
 }
 

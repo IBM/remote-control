@@ -196,17 +196,27 @@ func (s *Session) Complete(exitCode int) {
 }
 
 // RegisterClient adds a new client to the session in pending state.
-func (s *Session) RegisterClient(conn *websocket.Conn) (string, *SessionClient) {
+// If clientID is HostClientID, updates the host connection instead.
+func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string, *SessionClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clientID := uuid.New().String()
-	client := newSessionClient(clientID, types.ApprovalPending, conn)
-	s.clients[clientID] = client
+
+	// If the client identifies itself as the host, update the host connection
+	if clientID == types.HostClientID {
+		s.hostConn.conn = newConnection(conn)
+		s.hostConn.Info.JoinedAt = time.Now()
+		sessCh.Log(alog.DEBUG, "Updated host websocket connection")
+		return types.HostClientID, s.hostConn
+	}
+
+	client := uuid.New().String()
+	clientRec := newSessionClient(client, types.ApprovalPending, conn)
+	s.clients[client] = clientRec
 
 	// Notify the host of the pending client if approval required
-	s.hostConn.Send(types.WSMessagePendingClient, clientID)
+	s.hostConn.Send(types.WSMessagePendingClient, client)
 
-	return clientID, client
+	return client, clientRec
 }
 
 // GetClient gets the client if available

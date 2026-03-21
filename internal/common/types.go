@@ -142,7 +142,9 @@ type ErrorResponse struct {
 }
 
 // RegisterClientRequest is the body for POST /sessions/{id}/clients.
-type RegisterClientRequest struct{}
+type RegisterClientRequest struct {
+	ClientID string `json:"client_id,omitempty"`
+}
 
 // RegisterClientResponse is returned by POST /sessions/{id}/clients.
 type RegisterClientResponse struct {

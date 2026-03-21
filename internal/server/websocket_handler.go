@@ -17,14 +17,14 @@ var wsHandlerCh = alog.UseChannel("WS_HANDLER")
 
 // handleWebSocket handles WebSocket upgrade requests
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Upgrade HTTP connection to WebSocket
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket upgrade failed: %v", err)
 		return
 	}
 	sessionID := r.PathValue("id")
-	status, resp := s.handleRegisterClient(sessionID, conn)
+	clientID := r.URL.Query().Get("client_id")
+	status, resp := s.handleRegisterClient(sessionID, clientID, conn)
 	if nil == resp {
 		wsHandlerCh.Log(alog.DEBUG, "failed to register websocket client with status [%d]: %v", status, resp)
 		return
@@ -34,7 +34,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		wsHandlerCh.Log(alog.DEBUG, "Bad type returned by handleRegisterClient")
 		return
 	}
-	clientID := clientResp.ClientID
+	clientID = clientResp.ClientID
 	wsHandlerCh.Log(alog.INFO, "WebSocket connection established from %s", clientID)
 
 	// Get the client connection

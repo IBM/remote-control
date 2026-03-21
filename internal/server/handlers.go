@@ -8,6 +8,7 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/server/session"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -179,18 +180,42 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinRequest)
 
 /* -- Client approvals ------------------------------------------------------ */
 
-// handleRegisterClient handles POST /sessions/{id}/clients.
-// Server generates a unique client ID and returns it to the client.
-func (s *Server) handleRegisterClient(id string, conn *websocket.Conn) (int, interface{}) {
+// handleRegisterClient handles POST /sessions/{id}/clients and WebSocket registration.
+// If conn is nil, this is an HTTP request and a new client is always created.
+// If conn is provided, this is a WebSocket request and clientID may identify the host.
+func (s *Server) handleRegisterClient(id string, clientID string, conn *websocket.Conn) (int, interface{}) {
 	sess, err := s.store.Get(id)
 	if err != nil {
 		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
 
-	// Server generates the client ID
-	clientID, client := sess.RegisterClient(conn)
+	// If no clientID provided (HTTP POST), generate a new client
+	if clientID == "" && conn != nil {
+		clientID = uuid.New().String()
+	} else if conn == nil {
+		clientID = uuid.New().String()
+	}
 
-	// If approval is not required, auto-approve with default permission.
+	// Register or update the client
+	if conn != nil {
+		clientID, client := sess.RegisterClient(clientID, conn)
+		// If approval is not required and this is not the host, auto-approve
+		if !s.cfg.RequireApproval && clientID != types.HostClientID {
+			perm := types.Permission(s.cfg.DefaultPermission)
+			if perm != types.PermissionReadOnly && perm != types.PermissionReadWrite {
+				handlerCh.Log(alog.WARNING, "Misconfiguration: invalid default permission [%d]", perm)
+				perm = types.PermissionReadOnly
+			}
+			_ = sess.ApproveClient(clientID, perm)
+		}
+		return http.StatusOK, types.RegisterClientResponse{
+			ClientID: clientID,
+			Status:   client.Info.Approval,
+		}
+	}
+
+	// HTTP POST: always create new client
+	clientID, client := sess.RegisterClient(clientID, nil)
 	if !s.cfg.RequireApproval {
 		perm := types.Permission(s.cfg.DefaultPermission)
 		if perm != types.PermissionReadOnly && perm != types.PermissionReadWrite {
