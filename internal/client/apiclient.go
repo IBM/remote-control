@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // APIClient is an HTTP client for the remote-control server API.
@@ -16,7 +18,6 @@ type APIClient struct {
 	httpClient *http.Client
 }
 
-// NewAPIClient creates an APIClient for the given server URL.
 func NewAPIClient(baseURL string, httpClient *http.Client) *APIClient {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -38,49 +39,34 @@ func (c *APIClient) get(path string) (*http.Response, error) {
 
 func drainClose(resp *http.Response) {
 	if resp != nil {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
 }
 
-// SessionInfo contains basic session metadata.
+// SessionInfo contains session metadata.
 type SessionInfo struct {
 	ID      string   `json:"id"`
 	Command []string `json:"command"`
 	Status  string   `json:"status"`
 }
 
-// OutputChunk is a single chunk of output from the server.
-type OutputChunk struct {
-	Stream    string `json:"stream"`
-	Data      string `json:"data"` // base64
-	Offset    int64  `json:"offset"`
-	Timestamp string `json:"timestamp"` // RFC3339Nano
-}
-
-// PollOutputResponse is the response from GET /sessions/{id}/output.
-type PollOutputResponse struct {
-	Chunks        []OutputChunk    `json:"chunks"`
-	NextOffsets   map[string]int64 `json:"next_offsets"`
-	ActualOffsets map[string]int64 `json:"actual_offsets"`
-}
-
 // ErrForbidden is returned when the server rejects a request with 403.
 var ErrForbidden = fmt.Errorf("forbidden")
 
 // ListSessions returns all sessions from the server.
-func (c *APIClient) ListSessions() ([]SessionInfo, error) {
+func (c *APIClient) ListSessions() ([]types.SessionInfo, error) {
 	resp, err := c.get("/sessions")
 	if err != nil {
 		return nil, err
 	}
 	defer drainClose(resp)
-	var sessions []SessionInfo
+	var sessions []types.SessionInfo
 	return sessions, json.NewDecoder(resp.Body).Decode(&sessions)
 }
 
 // GetSession returns a single session's metadata.
-func (c *APIClient) GetSession(sessionID string) (*SessionInfo, error) {
+func (c *APIClient) GetSession(sessionID string) (*types.SessionInfo, error) {
 	resp, err := c.get("/sessions/" + sessionID)
 	if err != nil {
 		return nil, err
@@ -89,32 +75,11 @@ func (c *APIClient) GetSession(sessionID string) (*SessionInfo, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
-	var info SessionInfo
+	var info types.SessionInfo
 	return &info, json.NewDecoder(resp.Body).Decode(&info)
 }
 
-// PollOutput polls for output chunks at the given offsets.
-// clientID is required for client requests, empty for host requests.
-func (c *APIClient) PollOutput(sessionID, clientID string, stdoutOffset, stderrOffset int64) (*PollOutputResponse, error) {
-	path := fmt.Sprintf("/sessions/%s/output?stdout_offset=%d&stderr_offset=%d",
-		sessionID, stdoutOffset, stderrOffset)
-	if clientID != "" {
-		path += fmt.Sprintf("&client_id=%s", clientID)
-	}
-	resp, err := c.get(path)
-	if err != nil {
-		return nil, err
-	}
-	defer drainClose(resp)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("poll output: server returned %d", resp.StatusCode)
-	}
-	var result PollOutputResponse
-	return &result, json.NewDecoder(resp.Body).Decode(&result)
-}
-
 // RegisterClient registers this client with a session.
-// Server generates and returns the client ID along with approval status.
 func (c *APIClient) RegisterClient(sessionID string) (clientID, status string, err error) {
 	resp, err := c.post("/sessions/"+sessionID+"/clients", map[string]string{})
 	if err != nil {
@@ -132,7 +97,6 @@ func (c *APIClient) RegisterClient(sessionID string) (clientID, status string, e
 }
 
 // EnqueueStdin submits stdin data to the server.
-// Returns the entry ID or ErrForbidden if the client is not permitted.
 func (c *APIClient) EnqueueStdin(sessionID, clientID string, data []byte) (string, error) {
 	path := fmt.Sprintf("/sessions/%s/stdin?client_id=%s", sessionID, clientID)
 	resp, err := c.post(path, map[string]string{
@@ -151,7 +115,55 @@ func (c *APIClient) EnqueueStdin(sessionID, clientID string, data []byte) (strin
 	return result.ID, json.NewDecoder(resp.Body).Decode(&result)
 }
 
-// timestampToTime parses an RFC3339Nano timestamp string.
-func timestampToTime(s string) (time.Time, error) {
-	return time.Parse(time.RFC3339Nano, s)
+// PollOutput polls for output chunks using WebSocket message type 10 (WSMessageOutput).
+func (c *APIClient) PollOutput(sessionID, clientID string, stdoutOffset, stderrOffset int64) (*types.PollResponse, error) {
+	path := fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s",
+		sessionID, int(types.WSMessageOutput), clientID)
+	resp, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+	defer drainClose(resp)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("poll output: server returned %d", resp.StatusCode)
+	}
+	var result types.PollResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// PollMessageQueue polls for queued messages of a specific type.
+func (c *APIClient) PollMessageQueue(sessionID, clientID string, mType types.WSMessageType) ([]interface{}, error) {
+	path := fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s",
+		sessionID, int(mType), clientID)
+	resp, err := c.get(path)
+	if err != nil {
+		return nil, err
+	}
+	defer drainClose(resp)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("poll %d: server returned %d", mType, resp.StatusCode)
+	}
+	var result types.PollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if elems, ok := result.Elements.([]interface{}); ok {
+		return elems, nil
+	}
+	return make([]interface{}, 0), nil
+}
+
+// AckMessageQueue acknowledges processing of messages of a specific type.
+func (c *APIClient) AckMessageQueue(sessionID, clientID string, mType types.WSMessageType) error {
+	path := fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s",
+		sessionID, int(mType), clientID)
+	resp, err := c.get(path)
+	if err != nil {
+		return err
+	}
+	defer drainClose(resp)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ack %d: server returned %d", mType, resp.StatusCode)
+	}
+	return nil
 }
