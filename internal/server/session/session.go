@@ -12,12 +12,17 @@ import (
 
 var sessCh = alog.UseChannel("SESSION")
 
+type queuedMessage struct {
+	data   interface{}
+	peeked bool
+}
+
 type SessionClient struct {
 	Info types.ClientInfo
 
 	mu    sync.RWMutex
 	conn  *Connection
-	msgQs map[types.WSMessageType][]interface{}
+	msgQs map[types.WSMessageType][]queuedMessage
 }
 
 func newSessionClient(clientID string, approval types.ApprovalStatus, conn *websocket.Conn) *SessionClient {
@@ -30,7 +35,7 @@ func newSessionClient(clientID string, approval types.ApprovalStatus, conn *webs
 			LastPollAt: now,
 		},
 		conn:  newConnection(conn),
-		msgQs: make(map[types.WSMessageType][]interface{}),
+		msgQs: make(map[types.WSMessageType][]queuedMessage),
 	}
 	return client
 }
@@ -53,38 +58,55 @@ func (c *SessionClient) Send(mType types.WSMessageType, message interface{}) {
 	// Get the right queue
 	q, ok := c.msgQs[mType]
 	if !ok {
-		q = make([]interface{}, 0)
+		q = make([]queuedMessage, 0)
 	}
 
 	// Add to the queue
-	q = append(q, message)
+	q = append(q, queuedMessage{data: message, peeked: false})
 
 	// Attempt to send to the connection and clear the queue if successful
 	if nil == c.conn.SendMessage(mType, q) {
-		q = make([]interface{}, 0)
+		q = make([]queuedMessage, 0)
 	}
 	c.msgQs[mType] = q
 }
 
-// Get all elements from a queue, but don't mutate them
+// Get all elements from a queue, marking them as peeked but don't remove them
 func (c *SessionClient) GetAllQueue(mType types.WSMessageType) []interface{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	q, ok := c.msgQs[mType]
 	if !ok {
 		return make([]interface{}, 0)
 	}
-	return q
+
+	result := make([]interface{}, len(q))
+	for i := range q {
+		q[i].peeked = true
+		result[i] = q[i].data
+	}
+	return result
 }
 
-// Get all elements off the queue and remove them
+// Get all elements off the queue and remove them (only removes peeked messages)
 func (c *SessionClient) ClearAllQueue(mType types.WSMessageType) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, ok := c.msgQs[mType]; ok {
-		c.msgQs[mType] = make([]interface{}, 0)
+	q, ok := c.msgQs[mType]
+	if !ok {
+		return
 	}
+
+	// Only remove peeked messages, keep unpeeked ones
+	var remaining []queuedMessage
+	for _, mq := range q {
+		if !mq.peeked {
+			remaining = append(remaining, mq)
+		}
+	}
+
+	c.msgQs[mType] = remaining
 }
 
 // Close the underlying connection

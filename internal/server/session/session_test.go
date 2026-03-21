@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -487,6 +488,9 @@ func TestClearClientQueue(t *testing.T) {
 	// Enqueue some data
 	sess.EnqueueStdin([]byte("test"))
 
+	// Peek at the queue first to mark message as peeked
+	_ = sess.PeekClientQueue(types.HostClientID, types.WSMessageStdin)
+
 	// Clear the queue
 	sess.ClearClientQueue(types.HostClientID, types.WSMessageStdin)
 
@@ -691,5 +695,80 @@ func TestConcurrentClientRegistration(t *testing.T) {
 
 	if len(idMap) != numGoroutines {
 		t.Errorf("expected %d unique IDs, got %d", numGoroutines, len(idMap))
+	}
+}
+
+// ============================================================================
+// Peek/Ack Race Condition Tests
+// ============================================================================
+
+func TestAckOnlyClearsPeekedMessages(t *testing.T) {
+	sess := newSession("test", 1024, nil)
+
+	clientID, client := sess.RegisterClient("", nil)
+
+	// Step 1: Add first message
+	chunk1 := &types.OutputChunk{
+		Stream: types.StreamStdout,
+		Data:   []byte("chunk1"),
+	}
+	client.Send(types.WSMessageOutput, chunk1)
+
+	// Step 2: Poll (peek) the queue - marks chunk1 as peeked
+	polled := sess.PeekClientQueue(clientID, types.WSMessageOutput)
+	if len(polled) != 1 {
+		t.Fatalf("expected 1 message after poll, got %d", len(polled))
+	}
+
+	// Step 3: Simulate race condition - new message arrives between poll and ack
+	chunk2 := &types.OutputChunk{
+		Stream: types.StreamStdout,
+		Data:   []byte("chunk2"),
+	}
+	client.Send(types.WSMessageOutput, chunk2)
+
+	// Step 4: Ack (should only clear the peeked message - chunk1)
+	sess.ClearClientQueue(clientID, types.WSMessageOutput)
+
+	// Step 5: Verify only the unpeeked message (chunk2) remains
+	remaining := sess.PeekClientQueue(clientID, types.WSMessageOutput)
+	if len(remaining) != 1 {
+		t.Errorf("expected 1 remaining message after ack, got %d", len(remaining))
+	}
+
+	// The remaining message should be chunk2 (not peeked)
+	if len(remaining) == 1 {
+		if rest, ok := remaining[0].(*types.OutputChunk); ok {
+			if string(rest.Data) != "chunk2" {
+				t.Errorf("expected remaining message to be chunk2, got %s", string(rest.Data))
+			}
+		} else {
+			t.Errorf("unexpected type in remaining queue")
+		}
+	}
+}
+
+func TestAckWithoutPeekPreservesAllMessages(t *testing.T) {
+	sess := newSession("test", 1024, nil)
+
+	clientID, client := sess.RegisterClient("", nil)
+
+	// Add some messages without peeking
+	for i := 0; i < 5; i++ {
+		chunk := &types.OutputChunk{
+			Stream: types.StreamStdout,
+			Data:   []byte(fmt.Sprintf("chunk%d", i)),
+		}
+		client.Send(types.WSMessageOutput, chunk)
+	}
+
+	// Clear the queue without peeking first (simulating a bug or misbehavior)
+	// With the fix, none should be cleared because none were peeked
+	sess.ClearClientQueue(clientID, types.WSMessageOutput)
+
+	// Verify all messages remain (none were peeked)
+	remaining := sess.PeekClientQueue(clientID, types.WSMessageOutput)
+	if len(remaining) != 5 {
+		t.Errorf("expected 5 remaining messages, got %d", len(remaining))
 	}
 }
