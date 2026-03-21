@@ -110,8 +110,6 @@ func TestSendMessageSuccess(t *testing.T) {
 }
 
 func TestSendMessageWithValidConnection(t *testing.T) {
-	// Create a real connection would require a websocket server
-	// For unit tests, we test the logic with nil conn which returns error
 	conn := newConnection(nil)
 
 	chunk := types.OutputChunk{
@@ -123,8 +121,8 @@ func TestSendMessageWithValidConnection(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when websocket is nil")
 	}
-	if err.Error() != "No websocket" {
-		t.Errorf("expected 'No websocket' error, got: %v", err)
+	if err.Error() != "no websocket" {
+		t.Errorf("expected 'no websocket' error, got: %v", err)
 	}
 }
 
@@ -164,8 +162,8 @@ func TestSendMessageNilConnection(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when websocket is nil")
 	}
-	if err.Error() != "No websocket" {
-		t.Errorf("expected 'No websocket' error, got: %v", err)
+	if err.Error() != "no websocket" {
+		t.Errorf("expected 'no websocket' error, got: %v", err)
 	}
 }
 
@@ -190,9 +188,14 @@ func TestWSMessageEnvelope(t *testing.T) {
 		Data:   []byte("test"),
 	}
 
+	chunkJSON, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("failed to marshal chunk: %v", err)
+	}
+
 	wsMsg := types.WSMessage{
 		Type:    types.WSMessageOutput,
-		Message: chunk,
+		Message: json.RawMessage(chunkJSON),
 	}
 
 	data, err := json.Marshal(wsMsg)
@@ -224,9 +227,13 @@ func TestWSMessageTypeInEnvelope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			msgJSON, err := json.Marshal("test")
+			if err != nil {
+				t.Fatalf("failed to marshal message: %v", err)
+			}
 			wsMsg := types.WSMessage{
 				Type:    tt.msgType,
-				Message: "test",
+				Message: json.RawMessage(msgJSON),
 			}
 
 			data, err := json.Marshal(wsMsg)
