@@ -113,7 +113,7 @@ type CreateSessionRequest struct {
 
 // PollResponse is the body for GET /sessions/{id}/{m_type}/poll
 type PollResponse struct {
-	Elements interface{} `json:"elements"`
+	Elements []json.RawMessage `json:"elements"`
 }
 
 // PatchSessionRequest is the body for PATCH /sessions/{id}.

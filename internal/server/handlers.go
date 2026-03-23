@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -136,7 +137,15 @@ func (s *Server) handlePoll(sessionID, clientID string, mType types.WSMessageTyp
 
 	// Peek at the queue for the given session
 	queued := sess.PeekClientQueue(clientID, mType)
-	return http.StatusOK, types.PollResponse{Elements: queued}
+	elements := make([]json.RawMessage, len(queued))
+	for _, elt := range queued {
+		if eltBytes, err := json.Marshal(elt); nil != err {
+			return http.StatusInternalServerError, types.ErrorResponse{Error: err.Error()}
+		} else {
+			elements = append(elements, eltBytes)
+		}
+	}
+	return http.StatusOK, types.PollResponse{Elements: elements}
 }
 
 func (s *Server) handleAck(sessionID, clientID string, mType types.WSMessageType) (int, interface{}) {
