@@ -6,6 +6,7 @@ import (
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -133,19 +134,25 @@ type Session struct {
 
 	// client connections
 	clients map[string]*SessionClient
+
+	// whether or not clients need to be approved explicitly
+	approvalRequired  bool
+	defaultPermission types.Permission
 }
 
-func newSession(id string, maxOutputBuffer int, hostConn *websocket.Conn) *Session {
+func newSession(id string, hostConn *websocket.Conn, cfg *config.Config) *Session {
 	return &Session{
 		Info: types.SessionInfo{
 			ID:        id,
 			Status:    types.SessionStatusActive,
 			CreatedAt: time.Now(),
 		},
-		outputBuffer:    make([]*types.OutputChunk, 0),
-		maxOutputBuffer: maxOutputBuffer,
-		hostConn:        newSessionClient(types.HostClientID, types.ApprovalApproved, hostConn),
-		clients:         make(map[string]*SessionClient),
+		outputBuffer:      make([]*types.OutputChunk, 0),
+		maxOutputBuffer:   cfg.MaxOutputBuffer,
+		hostConn:          newSessionClient(types.HostClientID, types.ApprovalApproved, hostConn),
+		clients:           make(map[string]*SessionClient),
+		approvalRequired:  cfg.RequireApproval,
+		defaultPermission: cfg.DefaultPermission,
 	}
 }
 
@@ -235,8 +242,14 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 	clientRec := newSessionClient(client, types.ApprovalPending, conn)
 	s.clients[client] = clientRec
 
-	// Notify the host of the pending client if approval required
-	s.hostConn.Send(types.WSMessagePendingClient, client)
+	// If client approval required, notify the host of the pending client
+	if s.approvalRequired {
+		sessCh.Log(alog.DEBUG, "Sending approval request to host for client %s", client)
+		s.hostConn.Send(types.WSMessagePendingClient, client)
+	} else {
+		sessCh.Log(alog.DEBUG, "Approving client %s", client)
+		s.approveClient(clientID, s.defaultPermission)
+	}
 
 	return client, clientRec
 }
@@ -256,6 +269,11 @@ func (s *Session) GetClient(clientID string) *SessionClient {
 func (s *Session) ApproveClient(clientID string, perm types.Permission) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.approveClient(clientID, perm)
+}
+
+// unlocked internal helper for use within other locked public methods.
+func (s *Session) approveClient(clientID string, perm types.Permission) error {
 	rec, ok := s.clients[clientID]
 	if !ok {
 		return errNotFound(clientID)
@@ -264,7 +282,8 @@ func (s *Session) ApproveClient(clientID string, perm types.Permission) error {
 	rec.Info.Permission = perm
 
 	// Send the output buffer to the client
-	s.hostConn.Send(types.WSMessageOutput, s.outputBuffer)
+	sessCh.Log(alog.DEBUG3, "Sending queued output buffer to client %s", clientID)
+	rec.Send(types.WSMessageOutput, s.outputBuffer)
 
 	return nil
 }

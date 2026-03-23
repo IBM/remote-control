@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -24,12 +25,12 @@ func NewStore(maxOutputBuffer int) *Store {
 }
 
 // Create creates a new session and stores it in memory.
-func (s *Store) Create(id *string, conn *websocket.Conn) (*Session, error) {
+func (s *Store) Create(id *string, conn *websocket.Conn, cfg *config.Config) (*Session, error) {
 	if nil == id {
 		newId := uuid.New().String()
 		id = &newId
 	}
-	sess := newSession(*id, s.maxOutputBuffer, conn)
+	sess := newSession(*id, conn, cfg)
 
 	s.mu.Lock()
 	s.sessions[*id] = sess

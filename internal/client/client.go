@@ -320,10 +320,12 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 	}
 
 	// Initialize the websocket
+	ch.Log(alog.DEBUG2, "Initializing websocket")
 	c.initWebSocket(ctx, sessionID)
 	defer c.closeWebSocket()
 
 	// Set up persistent polls in isolated goroutines
+	ch.Log(alog.DEBUG2, "Setting up polling")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -345,6 +347,7 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 
 	// In raw mode, handle SIGWINCH for terminal size adjustments
 	if isRawMode {
+		ch.Log(alog.DEBUG2, "Enabling SIGWINCH")
 		sigWinchCh := make(chan os.Signal, 1)
 		signal.Notify(sigWinchCh, syscall.SIGWINCH)
 		defer signal.Stop(sigWinchCh)
@@ -428,6 +431,7 @@ func (c *Client) Run(ctx context.Context, sessionID string) error {
 		}
 	}()
 
+	ch.Log(alog.DEBUG2, "Waiting for completion")
 	<-cancelCtx.Done()
 	wg.Wait()
 
