@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -162,7 +161,7 @@ func (s *Server) handleAck(sessionID, clientID string, mType types.WSMessageType
 
 /* --- STDIN ---------------------------------------------------------------- */
 
-func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinRequest) (int, interface{}) {
+func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinEntry) (int, interface{}) {
 	handlerCh.Log(alog.DEBUG3, "Handling stdin from client [%s] for session [%s]", clientID, id)
 
 	sess, err := s.store.Get(id)
@@ -178,12 +177,7 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinRequest)
 		}
 	}
 
-	data, err := base64.StdEncoding.DecodeString(req.Data)
-	if err != nil {
-		return http.StatusBadRequest, types.ErrorResponse{Error: "data must be base64"}
-	}
-
-	sess.EnqueueStdin(data)
+	sess.EnqueueStdin(req.Data)
 	return http.StatusCreated, nil
 }
 

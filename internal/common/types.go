@@ -64,6 +64,28 @@ type StdinEntry struct {
 	Data []byte `json:"data"`
 }
 
+type serializedStdinEntry struct {
+	Data string `json:"data"`
+}
+
+func (e StdinEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(serializedOutputChunk{
+		Data: base64.StdEncoding.EncodeToString(e.Data),
+	})
+}
+
+func (e *StdinEntry) UnmarshalJSON(data []byte) error {
+	var ser serializedStdinEntry
+	if err := json.Unmarshal(data, &ser); nil != err {
+		return err
+	} else if decoded, err := base64.StdEncoding.DecodeString(ser.Data); nil != err {
+		return err
+	} else {
+		e.Data = decoded
+		return nil
+	}
+}
+
 // Permission defines what a connected client is allowed to do.
 type Permission string
 
@@ -120,11 +142,6 @@ type PollResponse struct {
 // PatchSessionRequest is the body for PATCH /sessions/{id}.
 type PatchSessionRequest struct {
 	ExitCode int `json:"exit_code"`
-}
-
-// StdinRequest is the body for POST /sessions/{id}/stdin.
-type StdinRequest struct {
-	Data string `json:"data"` // base64-encoded
 }
 
 // AckStdinRequest is the body for POST /sessions/{id}/stdin/ack.

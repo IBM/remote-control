@@ -134,7 +134,7 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 	id := r.PathValue("id")
 	clientID := r.URL.Query().Get("client_id")
 
-	var req types.StdinRequest
+	var req types.StdinEntry
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, types.ErrorResponse{Error: "invalid body"})
 		return

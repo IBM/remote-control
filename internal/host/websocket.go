@@ -3,7 +3,6 @@ package host
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -65,14 +64,6 @@ func (wh *WebSocketHost) OnPendingClient(handler func(string)) {
 	wh.mu.Lock()
 	defer wh.mu.Unlock()
 	wh.onPendingClientHandler = handler
-}
-
-// OnError registers a callback for errors
-func (wh *WebSocketHost) OnError(handler func(error)) {
-	wh.mu.Lock()
-	defer wh.mu.Unlock()
-	// Error handler removed - errors are logged internally
-	_ = handler
 }
 
 // IsConnected returns whether the WebSocket is currently connected
@@ -280,37 +271,6 @@ func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte) error {
 	}
 	wsHostCh.Log(alog.DEBUG4, "full bytes: %v", msgData)
 	wsHostCh.Log(alog.DEBUG4, "full json: %s", msgData)
-
-	select {
-	case wh.send <- msgData:
-		return nil
-	case <-wh.done:
-		return fmt.Errorf("connection closed")
-	default:
-		return fmt.Errorf("send buffer full")
-	}
-}
-
-// SendStdinSubmit submits host stdin data via WebSocket
-func (wh *WebSocketHost) SendStdinSubmit(data []byte) error {
-	// Encode as base64 for JSON transport
-	encoded := base64.StdEncoding.EncodeToString(data)
-
-	payload := types.StdinRequest{Data: encoded}
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	msg := types.WSMessage{
-		Type:    types.WSMessageStdin,
-		Message: payloadBytes,
-	}
-
-	msgData, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
 
 	select {
 	case wh.send <- msgData:

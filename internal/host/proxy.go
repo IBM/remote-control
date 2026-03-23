@@ -135,31 +135,6 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 	}
 }
 
-// processHostStdinEntry submits host stdin data via WebSocket or HTTP fallback
-func (h *Host) processHostStdinEntry(ctx context.Context, data []byte, client *types.APIClient, sessionID string, writeDirectly bool, ptmx *os.File, ptmxMu *sync.Mutex, wsHost *WebSocketHost) error {
-	// Write directly to PTY before submission for immediate terminal echo
-	if writeDirectly && ptmx != nil {
-		ptmxMu.Lock()
-		_, _ = ptmx.Write(data)
-		ptmxMu.Unlock()
-	}
-
-	// Send to server via WebSocket if connected, otherwise HTTP
-	if wsHost != nil && wsHost.IsConnected() {
-		if err := wsHost.SendStdinSubmit(data); err != nil {
-			wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send stdin error: %v", err)
-			return err
-		}
-	} else if client != nil {
-		if err := client.EnqueueStdin(sessionID, "host", data); err != nil {
-			ch.Log(alog.DEBUG, "[remote-control] enqueue stdin error: %v", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
 // proxyLocalStdin reads lines from os.Stdin, submits each line to the server
 // queue, and writes to the subprocess after acceptance. This ensures FIFO
 // ordering between host and client inputs.
@@ -214,14 +189,13 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 				continue
 			}
 
-			lineWithNewline := append(res.line, '\n')
+			// lineWithNewline := append(res.line, '\n')
 
 			// Submit directly to stdin
-			// TODO: This is not right!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-			writeErr := h.processHostStdinEntry(ctx, lineWithNewline, client, sessionID, true, nil, nil, nil)
-			if writeErr != nil {
-				ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
-			}
+			// TODO: THis is very broken!!!!!!!!!!!!!!!!!!!!!!
+			// if writeErr != nil {
+			// 	ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
+			// }
 		}
 	}
 }
@@ -296,9 +270,9 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 			// Accumulate for submission
 			batch = append(batch, b)
 
-			// Submit immediately
+			// Submit to the wrapped process
 			if len(batch) >= batchThreshold {
-				_ = h.processHostStdinEntry(ctx, batch, client, sessionID, false, nil, nil, wsHost)
+				_, _ = ptmx.Write(batch)
 				batch = nil
 			}
 		}
