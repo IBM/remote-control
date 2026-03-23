@@ -255,7 +255,7 @@ func (wh *WebSocketHost) handleDisconnect(ctx context.Context) {
 }
 
 // SendOutput sends output data via WebSocket
-func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte, offset int64, timestamp time.Time) error {
+func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte) error {
 	wsHostCh.Log(alog.DEBUG4, "sending output on stream %d: %v", stream, data)
 	payload := types.OutputChunk{
 		Stream: stream,
@@ -342,75 +342,4 @@ func (wh *WebSocketHost) Close() error {
 
 	wh.connected.Store(false)
 	return nil
-}
-
-// pollStdin polls for stdin entries when WebSocket is disconnected
-func (h *Host) pollStdin(ctx context.Context, sessionID string, writeFunc func([]byte) error) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessageStdin)
-			if err != nil {
-				continue
-			}
-
-			if entries, ok := pollResp.Elements.([]interface{}); ok && len(entries) > 0 {
-				for _, entry := range entries {
-					if entryMap, ok := entry.(map[string]interface{}); ok {
-						if dataStr, ok := entryMap["data"].(string); ok {
-							data, err := base64.StdEncoding.DecodeString(dataStr)
-							if err == nil && len(data) > 0 {
-								if err := writeFunc(data); err != nil {
-									wsHostCh.Log(alog.DEBUG, "[remote-control] stdin write error: %v", err)
-								}
-							}
-						}
-					}
-				}
-
-				if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessageStdin); err != nil {
-					wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
-				}
-			}
-		}
-	}
-}
-
-// pollPendingClients polls for pending client notifications when WebSocket is disconnected
-func (h *Host) pollPendingClients(ctx context.Context, sessionID string, rawMode bool) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Don't poll if websocket is connected
-			if h.wsHost.IsConnected() {
-				continue
-			}
-			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessagePendingClient)
-			if err != nil {
-				continue
-			}
-
-			if clients, ok := pollResp.Elements.([]interface{}); ok && len(clients) > 0 {
-				for _, client := range clients {
-					if clientIDStr, ok := client.(string); ok {
-						h.handleClientApproval(ctx, sessionID, clientIDStr, rawMode)
-					}
-				}
-
-				if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessagePendingClient); err != nil {
-					wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
-				}
-			}
-		}
-	}
 }

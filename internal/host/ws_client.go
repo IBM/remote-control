@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
@@ -85,13 +84,13 @@ func (wc *WebSocketClient) WebSocketHost() *WebSocketHost {
 }
 
 // SendOutput sends output data via WebSocket or HTTP fallback
-func (wc *WebSocketClient) SendOutput(stream types.Stream, data []byte, offset int64, timestamp time.Time) error {
+func (wc *WebSocketClient) SendOutput(stream types.Stream, data []byte, offset int64) error {
 	if wc.mode == ModeWebSocket && wc.ws != nil {
-		return wc.ws.SendOutput(stream, data, offset, timestamp)
+		return wc.ws.SendOutput(stream, data)
 	}
 	// Fallback to HTTP
 	if wc.client != nil {
-		return wc.client.AppendOutput(wc.session, stream, data, timestamp)
+		return wc.client.AppendOutput(wc.session, stream, data)
 	}
 	return fmt.Errorf("no connection available")
 }

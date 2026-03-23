@@ -170,16 +170,12 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 		}
 	}()
 
-	// Track offsets for output
-	var stdoutOffset int64
-	var stdoutOffsetMu sync.Mutex
-
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID, h.wsHost, &stdoutOffset, &stdoutOffsetMu)
+		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID, h.wsHost)
 	}()
 
 	wg.Add(1)

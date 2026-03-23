@@ -3,6 +3,7 @@ package host
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -38,16 +39,12 @@ func (sw *syncWriter) Close() error {
 // stream is "stdout" or "stderr".
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
 func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *types.APIClient, sessionID string, stream types.Stream, wsHost *WebSocketHost) {
-	var offset int64
-	var offsetMu sync.Mutex
-
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			ts := time.Now() // host-grounded timestamp
 
 			// Write to local terminal.
 			if _, werr := dst.Write(chunk); werr != nil {
@@ -56,12 +53,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 
 			// Forward to server (prefer WebSocket, fallback to HTTP).
 			if wsHost != nil && wsHost.IsConnected() {
-				offsetMu.Lock()
-				currentOffset := offset
-				offset += int64(n)
-				offsetMu.Unlock()
-
-				if serr := wsHost.SendOutput(stream, chunk, currentOffset, ts); serr != nil {
+				if serr := wsHost.SendOutput(stream, chunk); serr != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
 				}
 			} else if client != nil {
@@ -69,7 +61,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 				case <-ctx.Done():
 					return
 				default:
-					if serr := client.AppendOutput(sessionID, stream, chunk, ts); serr != nil {
+					if serr := client.AppendOutput(sessionID, stream, chunk); serr != nil {
 						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
 				}
@@ -95,14 +87,13 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 // "stdout" stream output. io.EOF and "input/output error" are treated as
 // normal PTY HUP (subprocess exited).
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
-func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.APIClient, sessionID string, wsHost *WebSocketHost, offset *int64, offsetMu *sync.Mutex) {
+func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.APIClient, sessionID string, wsHost *WebSocketHost) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			ts := time.Now()
 
 			// Skip local display while an approval prompt is shown so the
 			// subprocess TUI cannot re-render over the prompt text.
@@ -114,12 +105,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 
 			// Forward to server (prefer WebSocket, fallback to HTTP).
 			if wsHost != nil && wsHost.IsConnected() {
-				offsetMu.Lock()
-				currentOffset := *offset
-				*offset += int64(n)
-				offsetMu.Unlock()
-
-				if serr := wsHost.SendOutput(types.StreamStdout, chunk, currentOffset, ts); serr != nil {
+				if serr := wsHost.SendOutput(types.StreamStdout, chunk); serr != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
 				}
 			} else if client != nil {
@@ -127,7 +113,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 				case <-ctx.Done():
 					return
 				default:
-					if serr := client.AppendOutput(sessionID, types.StreamStdout, chunk, ts); serr != nil {
+					if serr := client.AppendOutput(sessionID, types.StreamStdout, chunk); serr != nil {
 						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
 				}
@@ -362,5 +348,73 @@ func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *s
 	} else {
 		// Wait for WebSocket callbacks
 		<-ctx.Done()
+	}
+}
+
+// pollStdin polls for stdin entries when WebSocket is disconnected
+func (h *Host) pollStdin(ctx context.Context, sessionID string, writeFunc func([]byte) error) {
+	ticker := time.NewTicker(time.Duration(h.cfg.PollIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessageStdin)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range pollResp.Elements {
+				var stdinEntry types.StdinEntry
+				if err := json.Unmarshal(entry, &stdinEntry); nil != err {
+					wsHostCh.Log(alog.DEBUG, "Got bad stdin entry: %v", err)
+				} else {
+					if err := writeFunc(stdinEntry.Data); err != nil {
+						wsHostCh.Log(alog.DEBUG, "[remote-control] stdin write error: %v", err)
+					}
+				}
+			}
+
+			if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessageStdin); err != nil {
+				wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
+			}
+		}
+	}
+}
+
+// pollPendingClients polls for pending client notifications when WebSocket is disconnected
+func (h *Host) pollPendingClients(ctx context.Context, sessionID string, rawMode bool) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Don't poll if websocket is connected
+			if h.wsHost.IsConnected() {
+				continue
+			}
+			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessagePendingClient)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range pollResp.Elements {
+				var clientID string
+				if err := json.Unmarshal(entry, &clientID); nil != err {
+					wsHostCh.Log(alog.DEBUG, "Invalid pending client id %v: %v", entry, err)
+				} else {
+					h.handleClientApproval(ctx, sessionID, clientID, rawMode)
+				}
+			}
+
+			if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessagePendingClient); err != nil {
+				wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
+			}
+		}
 	}
 }
