@@ -35,7 +35,7 @@ func (sw *syncWriter) Close() error {
 }
 
 // proxyOutput reads from r (a subprocess pipe), writes to local dst, and
-// forwards each chunk to the server as timestamped output.
+// forwards each chunk to the server.
 // stream is "stdout" or "stderr".
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
 func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *types.APIClient, sessionID string, stream types.Stream, wsHost *WebSocketHost) {
@@ -47,12 +47,14 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 			copy(chunk, buf[:n])
 
 			// Write to local terminal.
+			ch.Log(alog.DEBUG4, "Writing to local terminal: %v", chunk)
 			if _, werr := dst.Write(chunk); werr != nil {
 				ch.Log(alog.DEBUG, "[remote-control] local %s write error: %v", stream, werr)
 			}
 
 			// Forward to server (prefer WebSocket, fallback to HTTP).
 			if wsHost != nil && wsHost.IsConnected() {
+				wsHostCh.Log(alog.DEBUG2, "Sending output for stream %d via WebSocket", stream)
 				if serr := wsHost.SendOutput(stream, chunk); serr != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
 				}
@@ -61,6 +63,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 				case <-ctx.Done():
 					return
 				default:
+					wsHostCh.Log(alog.DEBUG2, "Sending output for stream %d via HTTP", stream)
 					if serr := client.AppendOutput(sessionID, stream, chunk); serr != nil {
 						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
@@ -94,10 +97,12 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
+			ch.Log(alog.DEBUG4, "Proxying output chunk %v", chunk)
 
 			// Skip local display while an approval prompt is shown so the
 			// subprocess TUI cannot re-render over the prompt text.
 			if !h.pauseOutput.Load() {
+				ch.Log(alog.DEBUG4, "Writing to local terminal: %v", chunk)
 				if _, werr := os.Stdout.Write(chunk); werr != nil {
 					ch.Log(alog.WARNING, "[remote-control] local stdout write error: %v", werr)
 				}
@@ -105,6 +110,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 
 			// Forward to server (prefer WebSocket, fallback to HTTP).
 			if wsHost != nil && wsHost.IsConnected() {
+				wsHostCh.Log(alog.DEBUG2, "Sending output via WebSocket")
 				if serr := wsHost.SendOutput(types.StreamStdout, chunk); serr != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send output error: %v", serr)
 				}
@@ -113,6 +119,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 				case <-ctx.Done():
 					return
 				default:
+					wsHostCh.Log(alog.DEBUG2, "Sending output via HTTP")
 					if serr := client.AppendOutput(sessionID, types.StreamStdout, chunk); serr != nil {
 						ch.Log(alog.DEBUG, "[remote-control] append output error: %v", serr)
 					}
@@ -269,26 +276,8 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 
 			// Accumulate for submission
 			batch = append(batch, b)
-
-			// Submit to the wrapped process
-			if len(batch) >= batchThreshold {
-				_, _ = ptmx.Write(batch)
-				batch = nil
-			}
 		}
 	}
-}
-
-// processServerStdinEntryFromCallback handles a stdin entry received from the server via WebSocket.
-// Only writes client entries; skips host entries to avoid echo loop since they were already written directly to PTY.
-func (h *Host) processServerStdinEntryFromCallback(ctx context.Context, entry types.StdinEntry, writeFunc func([]byte) error) error {
-	// Skip empty data
-	if len(entry.Data) == 0 {
-		return nil
-	}
-
-	// Write client entries to subprocess
-	return writeFunc(entry.Data)
 }
 
 // proxyServerStdin handles server stdin entries.
@@ -335,6 +324,10 @@ func (h *Host) pollStdin(ctx context.Context, sessionID string, writeFunc func([
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Don't poll if websocket connected
+			if h.wsHost.IsConnected() {
+				continue
+			}
 			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessageStdin)
 			if err != nil {
 				continue

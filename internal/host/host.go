@@ -370,6 +370,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 
 	// Set up stdin handler - receives stdin from other clients via WebSocket
 	h.wsHost.OnStdin(func(entry types.StdinEntry) {
+		ch.Log(alog.DEBUG, "Processing WS stdin")
 		// TODO ---------------- This seems broken!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 		// stdin from other clients is handled in proxyServerStdin
 		// this callback is kept for potential future use
