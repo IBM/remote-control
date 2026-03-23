@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // LoggingConfig holds the key configuration elements for logging
@@ -33,11 +34,11 @@ type Config struct {
 	ServerTLS TLSBundle `json:"server_tls"`
 	ClientTLS TLSBundle `json:"client_tls"`
 
-	RequireApproval      bool   `json:"require_approval"`
-	DefaultPermission    string `json:"default_permission"`
-	PollIntervalMs       int    `json:"poll_interval_ms"`
-	ClientTimeoutSeconds int    `json:"client_timeout_seconds"`
-	MaxOutputBuffer      int64  `json:"max_output_buffer"`
+	RequireApproval      bool             `json:"require_approval"`
+	DefaultPermission    types.Permission `json:"default_permission"`
+	PollIntervalMs       int              `json:"poll_interval_ms"`
+	ClientTimeoutSeconds int              `json:"client_timeout_seconds"`
+	MaxOutputBuffer      int              `json:"max_output_buffer"`
 
 	// WebSocket configuration
 	EnableWebSocket        bool   `json:"enable_websocket"`
@@ -55,16 +56,14 @@ func defaults() *Config {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".remote-control")
 	return &Config{
-		ConfigDir:            configDir,
-		ServerURL:            "https://localhost:8443",
-		RequireApproval:      false,
-		DefaultPermission:    "read-write",
-		PollIntervalMs:       100,
-		ClientTimeoutSeconds: 60,
-		MaxOutputBuffer:      1024 * 1024, // 1MB default w/ 1 byte chunks
-		EnableWebSocket:      true,
-		// WebSocketPingInterval:  30,
-		// WebSocketPongTimeout:   10,
+		ConfigDir:              configDir,
+		ServerURL:              "https://localhost:8443",
+		RequireApproval:        false,
+		DefaultPermission:      types.PermissionReadWrite,
+		PollIntervalMs:         100,
+		ClientTimeoutSeconds:   60,
+		MaxOutputBuffer:        1024 * 1024, // 1MB default w/ 1 byte chunks
+		EnableWebSocket:        true,
 		WSFailureThreshold:     3,
 		WSFailureWindow:        60,
 		WSUpgradeCheckInterval: 10,
