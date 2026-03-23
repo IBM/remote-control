@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -355,7 +354,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	tlsCfg := buildTLSConfig(h.cfg)
 
 	// Derive WebSocket URL from ServerURL
-	wsURL := deriveWebSocketURL(h.cfg.ServerURL)
+	wsURL := types.DeriveWebSocketURL(h.cfg.ServerURL)
 	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
 
 	// Create WebSocket host connection
@@ -371,14 +370,10 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 
 	// Set up stdin handler - receives stdin from other clients via WebSocket
 	h.wsHost.OnStdin(func(entry types.StdinEntry) {
+		// TODO ---------------- This seems broken!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 		// stdin from other clients is handled in proxyServerStdin
 		// this callback is kept for potential future use
 		_ = entry
-	})
-
-	// Set up error handler
-	h.wsHost.OnError(func(err error) {
-		ch.Log(alog.DEBUG, "[remote-control] WebSocket error: %v", err)
 	})
 
 	err := h.wsHost.Connect(ctx)
@@ -392,32 +387,6 @@ func (h *Host) closeWebSocket() {
 	if h.wsHost != nil {
 		h.wsHost.Close()
 	}
-}
-
-// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
-// It strips any existing path and query parameters since the WebSocket path is constructed separately
-func deriveWebSocketURL(httpURL string) string {
-	parsed, err := url.Parse(httpURL)
-	if err != nil {
-		return httpURL
-	}
-
-	switch parsed.Scheme {
-	case "https":
-		parsed.Scheme = "wss"
-	case "http":
-		parsed.Scheme = "ws"
-	default:
-		// Return as-is if already ws/wss or unknown
-		return httpURL
-	}
-
-	// Reset path and query - the caller will add /ws/{sessionID}
-	parsed.Path = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-
-	return parsed.String()
 }
 
 // pollClientApprovals handles client approval notifications.

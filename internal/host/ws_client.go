@@ -35,7 +35,7 @@ func NewWebSocketClient(serverURL, sessionID string, client *types.APIClient) *W
 
 // connectWebSocket attempts to establish a WebSocket connection
 func (wc *WebSocketClient) connectWebSocket(ctx context.Context, clientID string, tlsCfg *tls.Config) error {
-	wsURL := deriveWebSocketURL(wc.client.BaseURL)
+	wsURL := types.DeriveWebSocketURL(wc.client.BaseURL)
 
 	wc.ws = NewWebSocketHost(wsURL, tlsCfg, wc.session, clientID)
 
