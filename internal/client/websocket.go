@@ -17,22 +17,17 @@ var wsCh = alog.UseChannel("WS_CLIENT")
 
 // WebSocketConnection manages a WebSocket connection to the server
 type WebSocketConnection struct {
-	url         string
-	tlsConfig   *tls.Config
-	conn        *websocket.Conn
-	clientID    string
-	sessionID   string
-	outputBuf   []types.OutputChunk
-	outputBufMu sync.Mutex
+	url       string
+	tlsConfig *tls.Config
+	conn      *websocket.Conn
+	clientID  string
+	sessionID string
 
-	handler      OutputHandler
-	stdinHandler func(StdinEntry)
-	done         chan struct{}
-	stop         chan struct{}
-	mu           sync.RWMutex
-
-	nextPollStdout int64
-	nextPollStderr int64
+	handler OutputHandler
+	send    chan []byte
+	done    chan struct{}
+	stop    chan struct{}
+	mu      sync.RWMutex
 
 	connected bool
 }
@@ -42,15 +37,13 @@ type OutputHandler func(chunk types.OutputChunk)
 // NewWebSocketConnection creates a new WebSocket connection
 func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, sessionID string) *WebSocketConnection {
 	return &WebSocketConnection{
-		url:            url,
-		tlsConfig:      tlsConfig,
-		clientID:       clientID,
-		sessionID:      sessionID,
-		done:           make(chan struct{}),
-		stop:           make(chan struct{}),
-		outputBuf:      make([]types.OutputChunk, 0),
-		nextPollStdout: 0,
-		nextPollStderr: 0,
+		url:       url,
+		tlsConfig: tlsConfig,
+		clientID:  clientID,
+		sessionID: sessionID,
+		send:      make(chan []byte, 256),
+		done:      make(chan struct{}),
+		stop:      make(chan struct{}),
 	}
 }
 
@@ -77,8 +70,9 @@ func (ws *WebSocketConnection) Connect(ctx context.Context) error {
 	}
 	ws.mu.Unlock()
 
-	wsCh.Log(alog.DEBUG, "Dialing WebSocket at [%s]", ws.url)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, ws.url, nil)
+	wsURL := ws.url + "/ws/" + ws.sessionID
+	wsCh.Log(alog.DEBUG, "Dialing WebSocket at [%s]", wsURL)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("WebSocket dial failed: %w", err)
 	}
@@ -148,6 +142,25 @@ func (ws *WebSocketConnection) writePump(ctx context.Context) {
 			return
 		case <-ws.done:
 			return
+		case message, ok := <-ws.send:
+			ws.mu.RLock()
+			conn := ws.conn
+			ws.mu.RUnlock()
+
+			if conn == nil {
+				return
+			}
+
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if !ok {
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				wsCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
+				return
+			}
 		case <-t.C:
 			ws.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := ws.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
@@ -161,6 +174,7 @@ func (ws *WebSocketConnection) writePump(ctx context.Context) {
 func (ws *WebSocketConnection) handleMessage(msg types.WSMessage) {
 	switch msg.Type {
 	case types.WSMessageOutput:
+		// TODO --- handle this correctly!!!!!!!!!!!!
 		var payload types.OutputChunk
 		if err := msg.UnmarshalMessage(&payload); err == nil {
 			wsCh.Log(alog.DEBUG4, "Received output chunk: stream=%d, len=%d", payload.Stream, len(payload.Data))
@@ -223,21 +237,6 @@ func (ws *WebSocketConnection) Close() error {
 	return nil
 }
 
-// OnStdinPending registers a callback for pending stdin
-func (ws *WebSocketConnection) OnStdinPending(handler func(StdinEntry)) {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-	ws.stdinHandler = handler
-}
-
-// StdinEntry represents a stdin entry (for callbacks)
-type StdinEntry struct {
-	ID     string
-	Source string
-	Data   string
-	Status string
-}
-
 // IsConnected returns whether the WebSocket is currently connected
 func (ws *WebSocketConnection) IsConnected() bool {
 	ws.mu.RLock()
@@ -245,39 +244,30 @@ func (ws *WebSocketConnection) IsConnected() bool {
 	return ws.connected
 }
 
-// AddOutput buffers output chunks to be consumed via polling
-func (ws *WebSocketConnection) AddOutput(chunk types.OutputChunk) {
-	ws.outputBufMu.Lock()
-	defer ws.outputBufMu.Unlock()
-	ws.outputBuf = append(ws.outputBuf, chunk)
-}
-
-// PopOutputs returns all buffered output chunks and advances the poll offset
-func (ws *WebSocketConnection) PopOutputs(stdoutOffset, stderrOffset int64) ([]types.OutputChunk, int64, int64) {
-	ws.outputBufMu.Lock()
-	defer ws.outputBufMu.Unlock()
-
-	result := make([]types.OutputChunk, 0)
-	newStdoutOffset := stdoutOffset
-	newStderrOffset := stderrOffset
-
-	for _, chunk := range ws.outputBuf {
-		if chunk.Stream == types.StreamStdout {
-			if int64(len(chunk.Data)) <= stdoutOffset {
-				continue
-			}
-		}
-
-		result = append(result, chunk)
-
-		// Update offsets
-		if chunk.Stream == types.StreamStdout {
-			newStdoutOffset += int64(len(chunk.Data))
-		} else if chunk.Stream == types.StreamStderr {
-			newStderrOffset += int64(len(chunk.Data))
-		}
+// SendStdinSubmit submits host stdin data via WebSocket
+func (ws *WebSocketConnection) SendStdinEntry(data []byte) error {
+	payload := types.StdinEntry{Data: data}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
 	}
 
-	ws.outputBuf = ws.outputBuf[:0]
-	return result, newStdoutOffset, newStderrOffset
+	msg := types.WSMessage{
+		Type:    types.WSMessageStdin,
+		Message: payloadBytes,
+	}
+
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case ws.send <- msgData:
+		return nil
+	case <-ws.done:
+		return fmt.Errorf("connection closed")
+	default:
+		return fmt.Errorf("send buffer full")
+	}
 }

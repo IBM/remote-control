@@ -3,11 +3,12 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,22 +23,28 @@ import (
 var ch = alog.UseChannel("CLIENT")
 
 type Client struct {
-	cfg      *config.Config
-	api      *APIClient
-	clientID string
+	cfg       *config.Config
+	api       *types.APIClient
+	clientID  string
+	tlsConfig *tls.Config
+	wsClient  *WebSocketConnection
 }
 
 func NewClient(cfg *config.Config) *Client {
-	httpClient := buildHTTPClient(cfg)
+	httpClient, tlsCfg := buildHTTPClient(cfg)
 	return &Client{
-		cfg: cfg,
-		api: NewAPIClient(cfg.ServerURL, httpClient),
+		cfg:       cfg,
+		api:       types.NewAPIClient(cfg.ServerURL, httpClient),
+		clientID:  "",
+		tlsConfig: tlsCfg,
 	}
 }
 
-func buildHTTPClient(cfg *config.Config) *http.Client {
+/* -- Private Helpers ------------------------------------------------------- */
+
+func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
 	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
-		return &http.Client{Timeout: 30 * time.Second}
+		return &http.Client{Timeout: 30 * time.Second}, nil
 	}
 	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
 		cfg.ClientTLS.CertFile,
@@ -46,215 +53,12 @@ func buildHTTPClient(cfg *config.Config) *http.Client {
 	)
 	if err != nil {
 		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
-		return &http.Client{Timeout: 30 * time.Second}
+		return &http.Client{Timeout: 30 * time.Second}, nil
 	}
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
-}
-
-func (c *Client) Run(ctx context.Context, sessionID string) error {
-	if sessionID == "" {
-		var err error
-		sessionID, err = c.pickSession(ctx)
-		if err != nil {
-			return err
-		}
-	}
-
-	cancelCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	clientID, status, err := c.api.RegisterClient(sessionID)
-	if err != nil {
-		return fmt.Errorf("register: %w", err)
-	}
-	c.clientID = clientID
-	ch.Log(alog.DEBUG, "[remote-control] Registered with client ID: %s", c.clientID)
-
-	if status == string(types.ApprovalPending) {
-		fmt.Fprintln(os.Stderr, "[remote-control] Waiting for host approval...")
-		if err := c.waitForApproval(cancelCtx, sessionID); err != nil {
-			return err
-		}
-	}
-
-	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
-	if isRawMode {
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			return fmt.Errorf("make raw: %w", err)
-		}
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
-	}
-
-	if err := c.renderHistory(cancelCtx, sessionID); err != nil {
-		return fmt.Errorf("render history: %w", err)
-	}
-
-	if isRawMode {
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	var tlsCfg *tls.Config
-	if c.cfg.ClientTLS.CertFile != "" && c.cfg.ClientTLS.KeyFile != "" && c.cfg.ClientTLS.TrustedCAFile != "" {
-		tlsCfg, err = tlsconfig.BuildClientTLSConfig(
-			c.cfg.ClientTLS.CertFile,
-			c.cfg.ClientTLS.KeyFile,
-			c.cfg.ClientTLS.TrustedCAFile,
-		)
-		if err != nil {
-			ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; WebSocket will be disabled", err)
-		}
-	}
-
-	wsURL := deriveWebSocketURL(c.cfg.ServerURL, sessionID, c.clientID)
-
-	hc := NewHybridConnection(
-		wsURL,
-		tlsCfg,
-		c.api,
-		sessionID,
-		c.clientID,
-		c.cfg.WSFailureThreshold,
-		time.Duration(c.cfg.WSFailureWindow)*time.Second,
-		time.Duration(c.cfg.WSUpgradeCheckInterval)*time.Second,
-	)
-
-	hc.OnOutput(func(chunk types.OutputChunk) {
-		renderChunk(chunk)
-	})
-
-	hc.OnStdinPending(func(entry StdinEntry) {
-		ch.Log(alog.DEBUG, "[remote-control] stdin pending callback: %s", entry.ID)
-	})
-
-	if err := hc.Start(); err != nil {
-		return fmt.Errorf("start hybrid connection: %w", err)
-	}
-
-	if isRawMode {
-		sigWinchCh := make(chan os.Signal, 1)
-		signal.Notify(sigWinchCh, syscall.SIGWINCH)
-		defer signal.Stop(sigWinchCh)
-
-		go func() {
-			for {
-				select {
-				case <-cancelCtx.Done():
-					return
-				case <-sigWinchCh:
-					cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
-					if err == nil {
-						_ = cols
-						_ = rows
-					}
-				}
-			}
-		}()
-	}
-
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cancelCtx.Done():
-				return
-			case <-ticker.C:
-				info, err := c.api.GetSession(sessionID)
-				if err != nil {
-					continue
-				}
-				if info.Status == types.SessionStatusCompleted {
-					fmt.Fprintln(os.Stderr, "[remote-control] Session completed.")
-					return
-				}
-			}
-		}
-	}()
-
-	stopStdin := make(chan struct{})
-	defer close(stopStdin)
-
-	go func() {
-		if isRawMode {
-			buf := make([]byte, 32)
-			for {
-				select {
-				case <-cancelCtx.Done():
-					return
-				case <-stopStdin:
-					return
-				default:
-				}
-
-				n, err := os.Stdin.Read(buf)
-				if err != nil {
-					return
-				}
-				if n == 0 {
-					continue
-				}
-
-				data, shouldExit := filterInput(buf[:n])
-				if len(data) == 0 && !shouldExit {
-					continue
-				}
-
-				if len(data) > 0 {
-					hc.SubmitStdin(string(data))
-				}
-				if shouldExit {
-					cancel()
-					return
-				}
-			}
-		} else {
-			buf := make([]byte, 4096)
-			for {
-				select {
-				case <-cancelCtx.Done():
-					return
-				case <-stopStdin:
-					return
-				default:
-				}
-
-				n, err := os.Stdin.Read(buf)
-				if err != nil {
-					return
-				}
-				if n == 0 {
-					continue
-				}
-
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				hc.SubmitStdin(string(data))
-			}
-		}
-	}()
-
-	<-cancelCtx.Done()
-
-	return hc.Close()
-}
-
-func deriveWebSocketURL(httpURL, sessionID, clientID string) string {
-	parsed, err := url.Parse(httpURL)
-	if err != nil {
-		return httpURL
-	}
-
-	if parsed.Scheme == "https" {
-		parsed.Scheme = "wss"
-	} else if parsed.Scheme == "http" {
-		parsed.Scheme = "ws"
-	}
-
-	return fmt.Sprintf("%s/ws/%s?client_id=%s", parsed.String(), sessionID, clientID)
+	}, tlsCfg
 }
 
 func filterInput(input []byte) ([]byte, bool) {
@@ -347,39 +151,58 @@ func (c *Client) pickSession(_ context.Context) (string, error) {
 	return sessions[choice-1].ID, nil
 }
 
-func (c *Client) renderHistory(_ context.Context, sessionID string) error {
-	result, err := c.api.PollOutput(sessionID, c.clientID, 0, 0)
-	if err != nil {
-		return err
-	}
+func (c *Client) pollOutput(ctx context.Context, sessionID string) {
+	ticker := time.NewTicker(time.Duration(c.cfg.PollIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
 
-	chunks, ok := result.Elements.([]interface{})
-	if !ok {
-		return fmt.Errorf("unexpected type for chunks")
-	}
-	for _, elem := range chunks {
-		if chunkMap, ok := elem.(map[string]interface{}); ok {
-			chunk := parseOutputChunk(chunkMap)
-			renderChunk(chunk)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Don't poll if websocket connected
+			if c.wsClient.IsConnected() {
+				continue
+			}
+
+			pollResp, err := c.api.Poll(sessionID, types.HostClientID, types.WSMessageOutput)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range pollResp.Elements {
+				var chunk types.OutputChunk
+				if err := json.Unmarshal(entry, &chunk); nil != err {
+					ch.Log(alog.DEBUG, "Invalid output chunk: %v", err)
+				} else {
+					renderChunk(chunk)
+				}
+			}
+
+			if err := c.api.Ack(sessionID, types.HostClientID, types.WSMessageOutput); err != nil {
+				ch.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
+			}
 		}
 	}
-	return nil
 }
 
-func parseOutputChunk(m map[string]interface{}) types.OutputChunk {
-	stream := types.StreamUnknown
-	if s, ok := m["stream"].(float64); ok {
-		stream = types.Stream(s)
-	}
-
-	data := make([]byte, 0)
-	if d, ok := m["data"].(string); ok {
-		data = []byte(d)
-	}
-
-	return types.OutputChunk{
-		Stream: stream,
-		Data:   data,
+func (c *Client) pollSessionCompletion(cancelCtx context.Context, sessionID string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-cancelCtx.Done():
+			return
+		case <-ticker.C:
+			info, err := c.api.GetSession(sessionID)
+			if err != nil {
+				continue
+			}
+			if info.Status == types.SessionStatusCompleted {
+				fmt.Fprintln(os.Stderr, "[remote-control] Session completed.")
+				return
+			}
+		}
 	}
 }
 
@@ -391,24 +214,222 @@ func (c *Client) waitForApproval(cancelCtx context.Context, sessionID string) er
 		case <-cancelCtx.Done():
 			return cancelCtx.Err()
 		case <-ticker.C:
-			result, err := c.api.PollOutput(sessionID, c.clientID, 0, 0)
+			// If poll succeeds, client is authorized. Result is ignored. Polled
+			// elements will be marked on the server, but not purged without an
+			// ack, so they will be re-sent with the full poll start.
+			_, err := c.api.Poll(sessionID, c.clientID, types.WSMessageOutput)
 			if err != nil {
 				continue
 			}
-			_ = result
 			return nil
 		}
 	}
 }
 
-func (hc *HybridConnection) OnOutput(handler func(types.OutputChunk)) {
-	if hc.ws != nil {
-		hc.ws.OnOutput(handler)
+// initWebSocket establishes a WebSocket connection for real-time communication.
+func (c *Client) initWebSocket(ctx context.Context, sessionID string) {
+	// Check if WebSocket is enabled in config
+	if !c.cfg.EnableWebSocket {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket disabled, using HTTP polling mode")
+		c.wsClient = nil
+		return
+	}
+
+	// Derive WebSocket URL from ServerURL
+	wsURL := types.DeriveWebSocketURL(c.cfg.ServerURL)
+	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
+
+	// Create WebSocket host connection
+	c.wsClient = NewWebSocketConnection(wsURL, c.tlsConfig, c.clientID, sessionID)
+
+	// Render output when received on websocket
+	c.wsClient.OnOutput(func(chunk types.OutputChunk) {
+		renderChunk(chunk)
+	})
+
+	// Attempt to connect
+	err := c.wsClient.Connect(ctx)
+	if err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
+		c.wsClient = nil
 	}
 }
 
-func (hc *HybridConnection) OnStdinPending(handler func(StdinEntry)) {
-	if hc.ws != nil {
-		hc.ws.OnStdinPending(handler)
+func (c *Client) closeWebSocket() {
+	if c.wsClient != nil {
+		c.wsClient.Close()
 	}
+}
+
+func (c *Client) sendStdin(sessionID string, data []byte) error {
+	// Send to server via WebSocket if connected, otherwise HTTP
+	if c.wsClient != nil && c.wsClient.IsConnected() {
+		if err := c.wsClient.SendStdinEntry(data); err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] WebSocket send stdin error: %v", err)
+		} else {
+			return nil
+		}
+	}
+	if err := c.api.EnqueueStdin(sessionID, c.clientID, data); err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] enqueue stdin error: %v", err)
+		return err
+	}
+	return nil
+}
+
+/* -- Public ---------------------------------------------------------------- */
+
+func (c *Client) Run(ctx context.Context, sessionID string) error {
+	// If no explicit session provided, run the picker sequence
+	if sessionID == "" {
+		var err error
+		sessionID, err = c.pickSession(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Set up the context for shutdown
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Register with the server
+	clientID, status, err := c.api.RegisterClient(sessionID, c.clientID)
+	if err != nil {
+		return fmt.Errorf("register: %w", err)
+	}
+	c.clientID = clientID
+	ch.Log(alog.DEBUG, "[remote-control] Registered with client ID: %s", c.clientID)
+
+	// If approval stuck in pending, wait a bit for approval, then error
+	if status == types.ApprovalPending {
+		fmt.Fprintln(os.Stderr, "[remote-control] Waiting for host approval...")
+		if err := c.waitForApproval(cancelCtx, sessionID); err != nil {
+			return err
+		}
+	}
+
+	// Enter raw mode if acting as a terminal so bytes are rendered exactly
+	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
+	if isRawMode {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return fmt.Errorf("make raw: %w", err)
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+
+	// Initialize the websocket
+	c.initWebSocket(ctx, sessionID)
+	defer c.closeWebSocket()
+
+	// Set up persistent polls in isolated goroutines
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.pollOutput(cancelCtx, sessionID)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.pollSessionCompletion(cancelCtx, sessionID)
+	}()
+
+	// Small sleep in raw mode
+	// GLG: do we need this??
+	if isRawMode {
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// In raw mode, handle SIGWINCH for terminal size adjustments
+	if isRawMode {
+		sigWinchCh := make(chan os.Signal, 1)
+		signal.Notify(sigWinchCh, syscall.SIGWINCH)
+		defer signal.Stop(sigWinchCh)
+
+		go func() {
+			for {
+				select {
+				case <-cancelCtx.Done():
+					return
+				case <-sigWinchCh:
+					cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
+					if err == nil {
+						// TODO: adjust local terminal size
+						_ = cols
+						_ = rows
+					}
+				}
+			}
+		}()
+	}
+
+	stopStdin := make(chan struct{})
+	defer close(stopStdin)
+
+	go func() {
+		if isRawMode {
+			buf := make([]byte, 32)
+			for {
+				select {
+				case <-cancelCtx.Done():
+					return
+				case <-stopStdin:
+					return
+				default:
+				}
+
+				n, err := os.Stdin.Read(buf)
+				if err != nil {
+					return
+				}
+				if n == 0 {
+					continue
+				}
+
+				data, shouldExit := filterInput(buf[:n])
+				if len(data) == 0 && !shouldExit {
+					continue
+				}
+
+				if len(data) > 0 {
+					c.sendStdin(sessionID, data)
+				}
+				if shouldExit {
+					cancel()
+					return
+				}
+			}
+		} else {
+			buf := make([]byte, 4096)
+			for {
+				select {
+				case <-cancelCtx.Done():
+					return
+				case <-stopStdin:
+					return
+				default:
+				}
+
+				n, err := os.Stdin.Read(buf)
+				if err != nil {
+					return
+				}
+				if n == 0 {
+					continue
+				}
+
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				c.sendStdin(sessionID, data)
+			}
+		}
+	}()
+
+	<-cancelCtx.Done()
+	wg.Wait()
+
+	return nil
 }
