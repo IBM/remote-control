@@ -354,18 +354,10 @@ func (h *Host) pollStdin(ctx context.Context, sessionID string, writeFunc func([
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			mType := types.WSMessageStdin
-			resp, err := h.client.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, types.HostClientID))
+			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessageStdin)
 			if err != nil {
 				continue
 			}
-
-			var pollResp types.PollResponse
-			if err := json.NewDecoder(resp.Body).Decode(&pollResp); err != nil {
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
 
 			if entries, ok := pollResp.Elements.([]interface{}); ok && len(entries) > 0 {
 				for _, entry := range entries {
@@ -381,8 +373,7 @@ func (h *Host) pollStdin(ctx context.Context, sessionID string, writeFunc func([
 					}
 				}
 
-				_, err := h.client.post(fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s", sessionID, mType, types.HostClientID), nil)
-				if err != nil {
+				if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessageStdin); err != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
 				}
 			}
@@ -404,18 +395,10 @@ func (h *Host) pollPendingClients(ctx context.Context, sessionID string, rawMode
 			if h.wsHost.IsConnected() {
 				continue
 			}
-			mType := types.WSMessagePendingClient
-			resp, err := h.client.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, types.HostClientID))
+			pollResp, err := h.client.Poll(sessionID, types.HostClientID, types.WSMessagePendingClient)
 			if err != nil {
 				continue
 			}
-
-			var pollResp types.PollResponse
-			if err := json.NewDecoder(resp.Body).Decode(&pollResp); err != nil {
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
 
 			if clients, ok := pollResp.Elements.([]interface{}); ok && len(clients) > 0 {
 				for _, client := range clients {
@@ -424,8 +407,7 @@ func (h *Host) pollPendingClients(ctx context.Context, sessionID string, rawMode
 					}
 				}
 
-				_, err := h.client.post(fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s", sessionID, mType, types.HostClientID), nil)
-				if err != nil {
+				if err := h.client.Ack(sessionID, types.HostClientID, types.WSMessagePendingClient); err != nil {
 					wsHostCh.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
 				}
 			}

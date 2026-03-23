@@ -13,7 +13,7 @@ import (
 // WebSocketClient manages the host's WebSocket connection with fallback to HTTP polling
 type WebSocketClient struct {
 	ws      *WebSocketHost
-	client  *APIClient
+	client  *types.APIClient
 	session string
 
 	mode ConnectionMode
@@ -27,7 +27,7 @@ const (
 )
 
 // NewWebSocketClient creates a WebSocketClient with HTTP fallback
-func NewWebSocketClient(serverURL, sessionID string, client *APIClient) *WebSocketClient {
+func NewWebSocketClient(serverURL, sessionID string, client *types.APIClient) *WebSocketClient {
 	return &WebSocketClient{
 		client:  client,
 		session: sessionID,
@@ -36,7 +36,7 @@ func NewWebSocketClient(serverURL, sessionID string, client *APIClient) *WebSock
 
 // connectWebSocket attempts to establish a WebSocket connection
 func (wc *WebSocketClient) connectWebSocket(ctx context.Context, clientID string, tlsCfg *tls.Config) error {
-	wsURL := deriveWebSocketURL(wc.client.baseURL)
+	wsURL := deriveWebSocketURL(wc.client.BaseURL)
 
 	wc.ws = NewWebSocketHost(wsURL, tlsCfg, wc.session, clientID)
 
@@ -74,8 +74,8 @@ func (wc *WebSocketClient) IsWebSocket() bool {
 	return wc.mode == ModeWebSocket
 }
 
-// APIClient returns the underlying HTTP client (used for polling fallback)
-func (wc *WebSocketClient) APIClient() *APIClient {
+// types.APIClient returns the underlying HTTP client (used for polling fallback)
+func (wc *WebSocketClient) APIClient() *types.APIClient {
 	return wc.client
 }
 

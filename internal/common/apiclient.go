@@ -1,4 +1,4 @@
-package host
+package types
 
 import (
 	"bytes"
@@ -8,22 +8,20 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // APIClient is an HTTP client for the remote-control server API.
 type APIClient struct {
-	baseURL    string
+	BaseURL    string
 	httpClient *http.Client
 }
 
 // NewAPIClient creates an APIClient for the given server URL.
-func NewAPIClient(baseURL string, httpClient *http.Client) *APIClient {
+func NewAPIClient(BaseURL string, httpClient *http.Client) *APIClient {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &APIClient{baseURL: baseURL, httpClient: httpClient}
+	return &APIClient{BaseURL: BaseURL, httpClient: httpClient}
 }
 
 /* -- Private Helpers ------------------------------------------------------- */
@@ -33,11 +31,11 @@ func (c *APIClient) post(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.httpClient.Post(c.baseURL+path, "application/json", bytes.NewReader(data))
+	return c.httpClient.Post(c.BaseURL+path, "application/json", bytes.NewReader(data))
 }
 
 func (c *APIClient) get(path string) (*http.Response, error) {
-	return c.httpClient.Get(c.baseURL + path)
+	return c.httpClient.Get(c.BaseURL + path)
 }
 
 func (c *APIClient) patch(path string, body any) (*http.Response, error) {
@@ -45,7 +43,7 @@ func (c *APIClient) patch(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPatch, c.baseURL+path, bytes.NewReader(data))
+	req, err := http.NewRequest(http.MethodPatch, c.BaseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +52,7 @@ func (c *APIClient) patch(path string, body any) (*http.Response, error) {
 }
 
 func (c *APIClient) delete(path string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
+	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +85,8 @@ func (c *APIClient) CreateSession(command []string) (string, error) {
 }
 
 // AppendOutput sends a chunk of output to the server.
-func (c *APIClient) AppendOutput(sessionID string, stream types.Stream, data []byte, timestamp time.Time) error {
-	body := types.OutputChunk{
+func (c *APIClient) AppendOutput(sessionID string, stream Stream, data []byte, timestamp time.Time) error {
+	body := OutputChunk{
 		Stream: stream,
 		Data:   data,
 	}
@@ -105,7 +103,7 @@ func (c *APIClient) AppendOutput(sessionID string, stream types.Stream, data []b
 
 // EnqueueStdin sends stdin data to the server queue.
 func (c *APIClient) EnqueueStdin(sessionID, source string, data []byte) error {
-	body := types.StdinRequest{Data: base64.StdEncoding.EncodeToString(data)}
+	body := StdinRequest{Data: base64.StdEncoding.EncodeToString(data)}
 	resp, err := c.post("/sessions/"+sessionID+"/stdin", body)
 	if err != nil {
 		return err
@@ -114,40 +112,32 @@ func (c *APIClient) EnqueueStdin(sessionID, source string, data []byte) error {
 	return nil
 }
 
-// TODO: re-enable stdin ack
-// // PeekStdin returns the oldest pending stdin entry, or nil if none.
-// func (c *APIClient) PeekStdin(sessionID string) (*PendingStdin, error) {
-// 	resp, err := c.get("/sessions/" + sessionID + "/stdin")
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer drainClose(resp)
-// 	if resp.StatusCode != http.StatusOK {
-// 		return nil, fmt.Errorf("peek stdin: server returned %d", resp.StatusCode)
-// 	}
-// 	var result PendingStdin
-// 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-// 		return nil, err
-// 	}
-// 	return &result, nil
-// }
-//
-// // PendingStdin is a pending stdin entry returned from the server.
-// type PendingStdin struct {
-// 	ID     uint64 `json:"id"`
-// 	Source string `json:"source"`
-// 	Data   string `json:"data"` // base64
-// }
-//
-// // AckStdin marks a stdin entry as processed.
-// func (c *APIClient) AckStdin(sessionID string, entryID uint64) error {
-// 	resp, err := c.post("/sessions/"+sessionID+"/stdin/ack", map[string]uint64{"id": entryID})
-// 	if err != nil {
-// 		return err
-// 	}
-// 	drainClose(resp)
-// 	return nil
-// }
+// Poll returns the list of queued message for the given client.
+func (c *APIClient) Poll(sessionID, clientID string, mType WSMessageType) (*PollResponse, error) {
+	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, clientID))
+	if err != nil {
+		return nil, err
+	}
+	defer drainClose(resp)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("peek stdin: server returned %d", resp.StatusCode)
+	}
+	var pollResp PollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&pollResp); err != nil {
+		return nil, err
+	}
+	return &pollResp, nil
+}
+
+// Ack acknowledges receipt of the currently polled messages
+func (c *APIClient) Ack(sessionID, clientID string, mType WSMessageType) error {
+	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s", sessionID, mType, clientID))
+	if err != nil {
+		return err
+	}
+	drainClose(resp)
+	return nil
+}
 
 // CompleteSession marks the session as completed with the given exit code.
 func (c *APIClient) CompleteSession(sessionID string, exitCode int) error {
@@ -170,13 +160,13 @@ func (c *APIClient) DeleteSession(sessionID string) error {
 }
 
 // ListPendingClients returns clients waiting for approval.
-func (c *APIClient) ListPendingClients(sessionID string) ([]types.ClientInfo, error) {
+func (c *APIClient) ListPendingClients(sessionID string) ([]ClientInfo, error) {
 	resp, err := c.get("/sessions/" + sessionID + "/clients?status=pending")
 	if err != nil {
 		return nil, err
 	}
 	defer drainClose(resp)
-	var clients []types.ClientInfo
+	var clients []ClientInfo
 	if err := json.NewDecoder(resp.Body).Decode(&clients); err != nil {
 		return nil, err
 	}

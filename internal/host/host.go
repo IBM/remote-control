@@ -29,7 +29,7 @@ var ch = alog.UseChannel("HOST")
 // Host manages the subprocess lifecycle and I/O proxying.
 type Host struct {
 	cfg    *config.Config
-	client *APIClient
+	client *types.APIClient
 
 	// WebSocket connection for real-time communication
 	wsHost *WebSocketHost
@@ -53,7 +53,7 @@ func NewHost(cfg *config.Config) *Host {
 	httpClient := buildHTTPClient(cfg)
 	return &Host{
 		cfg:    cfg,
-		client: NewAPIClient(cfg.ServerURL, httpClient),
+		client: types.NewAPIClient(cfg.ServerURL, httpClient),
 	}
 }
 
@@ -110,8 +110,10 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 	defer cancel()
 
 	if term.IsTerminal(int(os.Stdin.Fd())) {
+		ch.Log(alog.INFO, "Running in PTY mode")
 		return h.runPTY(proxyCtx, cancel, command, sessionID)
 	}
+	ch.Log(alog.INFO, "Running in pipe mode")
 	return h.runPipe(proxyCtx, cancel, command, sessionID)
 }
 
