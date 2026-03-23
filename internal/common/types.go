@@ -76,6 +76,7 @@ const (
 type ApprovalStatus string
 
 const (
+	ApprovalUnknown  ApprovalStatus = ""
 	ApprovalPending  ApprovalStatus = "pending"
 	ApprovalApproved ApprovalStatus = "approved"
 	ApprovalDenied   ApprovalStatus = "denied"
