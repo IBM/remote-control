@@ -21,6 +21,7 @@ import (
 	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
 var ch = alog.UseChannel("HOST")
@@ -354,7 +355,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	tlsCfg := buildTLSConfig(h.cfg)
 
 	// Derive WebSocket URL from ServerURL
-	wsURL := types.DeriveWebSocketURL(h.cfg.ServerURL)
+	wsURL := ws.DeriveWebSocketURL(h.cfg.ServerURL)
 	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
 
 	// Create WebSocket host connection
