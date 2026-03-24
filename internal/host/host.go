@@ -170,6 +170,18 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 		}
 	}()
 
+	// Set up WebSocket stdin handler now that ptmx is available
+	if h.wsHost != nil {
+		h.wsHost.OnStdin(func(entry types.StdinEntry) {
+			ch.Log(alog.DEBUG, "Processing WS stdin: %d bytes", len(entry.Data))
+			ptmxMu.Lock()
+			defer ptmxMu.Unlock()
+			if _, err := ptmx.Write(entry.Data); err != nil {
+				ch.Log(alog.DEBUG, "WS stdin write error: %v", err)
+			}
+		})
+	}
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -261,6 +273,16 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start subprocess: %w", err)
+	}
+
+	// Set up WebSocket stdin handler now that stdinPipe is available
+	if h.wsHost != nil {
+		h.wsHost.OnStdin(func(entry types.StdinEntry) {
+			ch.Log(alog.DEBUG, "Processing WS stdin: %d bytes", len(entry.Data))
+			if _, err := stdinPipe.Write(entry.Data); err != nil {
+				ch.Log(alog.DEBUG, "WS stdin write error: %v", err)
+			}
+		})
 	}
 
 	var wg sync.WaitGroup
@@ -369,14 +391,8 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 		h.handleClientApproval(ctx, sessionID, clientID, true)
 	})
 
-	// Set up stdin handler - receives stdin from other clients via WebSocket
-	h.wsHost.OnStdin(func(entry types.StdinEntry) {
-		ch.Log(alog.DEBUG, "Processing WS stdin")
-		// TODO ---------------- This seems broken!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-		// stdin from other clients is handled in proxyServerStdin
-		// this callback is kept for potential future use
-		_ = entry
-	})
+	// NOTE: The actual OnStdin handler is set in runPTY/runPipe after
+	// the write target (ptmx/stdinPipe) is available.
 
 	err := h.wsHost.Connect(ctx)
 	if err != nil {
