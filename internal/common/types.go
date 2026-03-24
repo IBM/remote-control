@@ -69,7 +69,7 @@ type serializedStdinEntry struct {
 }
 
 func (e StdinEntry) MarshalJSON() ([]byte, error) {
-	return json.Marshal(serializedOutputChunk{
+	return json.Marshal(serializedStdinEntry{
 		Data: base64.StdEncoding.EncodeToString(e.Data),
 	})
 }

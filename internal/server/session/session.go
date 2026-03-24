@@ -187,6 +187,7 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 			sessCh.Log(alog.DEBUG4, "Sending chunk to %s", clientID)
 			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				Send(client, types.WSMessageOutput, &chunk)
 			}()
 		}
