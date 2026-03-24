@@ -322,19 +322,6 @@ func (s *Session) ClearClientQueue(clientID string, mType types.WSMessageType) {
 	}
 }
 
-// UpdateClientActivity updates the last poll timestamp for a client.
-func (s *Session) UpdateClientActivity(clientID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.clients[clientID]
-	if !ok {
-		// TODO: Auto re-register this client. Needs the ws connection!
-		return errNotFound(clientID)
-	}
-	rec.Info.LastPollAt = time.Now()
-	return nil
-}
-
 // RemoveInactiveClients removes clients that haven't polled within the timeout
 // period. Returns the list of removed client IDs.
 func (s *Session) RemoveInactiveClients(timeout time.Duration) []string {
