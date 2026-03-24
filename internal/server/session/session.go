@@ -51,27 +51,6 @@ func (c *SessionClient) GetDoneChan() chan struct{} {
 	return c.conn.done
 }
 
-// Queue an output chunk and if possible send it to the client
-func (c *SessionClient) Send(mType types.WSMessageType, message interface{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Get the right queue
-	q, ok := c.msgQs[mType]
-	if !ok {
-		q = make([]queuedMessage, 0)
-	}
-
-	// Add to the queue
-	q = append(q, queuedMessage{data: message, peeked: false})
-
-	// Attempt to send to the connection and clear the queue if successful
-	if nil == c.conn.SendMessage(mType, q) {
-		q = make([]queuedMessage, 0)
-	}
-	c.msgQs[mType] = q
-}
-
 // Get all elements from a queue, marking them as peeked but don't remove them
 func (c *SessionClient) GetAllQueue(mType types.WSMessageType) []interface{} {
 	c.mu.Lock()
@@ -117,6 +96,34 @@ func (c *SessionClient) Close() {
 	c.conn.Close()
 }
 
+// Queue an output chunk and if possible send it to the client
+// NOTE: Implemented as a free-function to support generic message type
+func Send[T any](c *SessionClient, mType types.WSMessageType, message T) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get the right queue
+	q, ok := c.msgQs[mType]
+	if !ok {
+		q = make([]queuedMessage, 0)
+	}
+
+	// Add to the queue
+	q = append(q, queuedMessage{data: message, peeked: false})
+
+	// Build payload from queue data
+	payload := make([]interface{}, len(q))
+	for i, msg := range q {
+		payload[i] = msg.data
+	}
+
+	// Attempt to send to the connection and clear the queue if successful
+	if nil == SendConnectionMessage(c.conn, mType, payload) {
+		q = make([]queuedMessage, 0)
+	}
+	c.msgQs[mType] = q
+}
+
 /* -- Session --------------------------------------------------------------- */
 
 // Session holds all state for a single remote-control session.
@@ -136,8 +143,7 @@ type Session struct {
 	clients map[string]*SessionClient
 
 	// whether or not clients need to be approved explicitly
-	approvalRequired  bool
-	defaultPermission types.Permission
+	approvalRequired bool
 }
 
 func newSession(id string, hostConn *websocket.Conn, cfg *config.Config) *Session {
@@ -147,12 +153,11 @@ func newSession(id string, hostConn *websocket.Conn, cfg *config.Config) *Sessio
 			Status:    types.SessionStatusActive,
 			CreatedAt: time.Now(),
 		},
-		outputBuffer:      make([]*types.OutputChunk, 0),
-		maxOutputBuffer:   cfg.MaxOutputBuffer,
-		hostConn:          newSessionClient(types.HostClientID, types.ApprovalApproved, hostConn),
-		clients:           make(map[string]*SessionClient),
-		approvalRequired:  cfg.RequireApproval,
-		defaultPermission: cfg.DefaultPermission,
+		outputBuffer:     make([]*types.OutputChunk, 0),
+		maxOutputBuffer:  cfg.MaxOutputBuffer,
+		hostConn:         newSessionClient(types.HostClientID, types.ApprovalApproved, hostConn),
+		clients:          make(map[string]*SessionClient),
+		approvalRequired: cfg.RequireApproval,
 	}
 }
 
@@ -182,7 +187,7 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 			sessCh.Log(alog.DEBUG4, "Sending chunk to %s", clientID)
 			wg.Add(1)
 			go func() {
-				client.Send(types.WSMessageOutput, &chunk)
+				Send(client, types.WSMessageOutput, &chunk)
 			}()
 		}
 	}
@@ -190,6 +195,7 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 
 	// Add to the outputBuffer and truncate if needed
 	s.outputBuffer = append(s.outputBuffer, &chunk)
+	sessCh.Log(alog.DEBUG3, "Appended to output buffer. Current length: %d", len(s.outputBuffer))
 	if s.maxOutputBuffer > 0 && len(s.outputBuffer) > s.maxOutputBuffer {
 		trimLen := len(s.outputBuffer) - s.maxOutputBuffer
 		sessCh.Log(alog.DEBUG3, "Trimming %d chunks from output buffer", trimLen)
@@ -211,7 +217,7 @@ func (s *Session) EnqueueStdin(data []byte) {
 	}
 
 	// Send to the host (enqueue if WS not connected)
-	s.hostConn.Send(types.WSMessageStdin, entry)
+	Send(s.hostConn, types.WSMessageStdin, entry)
 }
 
 // Complete marks the session as completed with the given exit code.
@@ -245,10 +251,7 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 	// If client approval required, notify the host of the pending client
 	if s.approvalRequired {
 		sessCh.Log(alog.DEBUG, "Sending approval request to host for client %s", client)
-		s.hostConn.Send(types.WSMessagePendingClient, client)
-	} else {
-		sessCh.Log(alog.DEBUG, "Approving client %s", client)
-		s.approveClient(clientID, s.defaultPermission)
+		Send(s.hostConn, types.WSMessagePendingClient, client)
 	}
 
 	return client, clientRec
@@ -269,11 +272,6 @@ func (s *Session) GetClient(clientID string) *SessionClient {
 func (s *Session) ApproveClient(clientID string, perm types.Permission) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.approveClient(clientID, perm)
-}
-
-// unlocked internal helper for use within other locked public methods.
-func (s *Session) approveClient(clientID string, perm types.Permission) error {
 	rec, ok := s.clients[clientID]
 	if !ok {
 		return errNotFound(clientID)
@@ -282,8 +280,11 @@ func (s *Session) approveClient(clientID string, perm types.Permission) error {
 	rec.Info.Permission = perm
 
 	// Send the output buffer to the client
-	sessCh.Log(alog.DEBUG3, "Sending queued output buffer to client %s", clientID)
-	rec.Send(types.WSMessageOutput, s.outputBuffer)
+	sessCh.Log(alog.DEBUG3, "Sending queued output buffer to client %s of length %d", clientID, len(s.outputBuffer))
+	sessCh.Log(alog.DEBUG4, "%s", s.outputBuffer)
+	for _, chunk := range s.outputBuffer {
+		Send(rec, types.WSMessageOutput, chunk)
+	}
 
 	return nil
 }

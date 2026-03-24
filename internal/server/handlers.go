@@ -204,12 +204,8 @@ func (s *Server) handleRegisterClient(id string, clientID string, conn *websocke
 		clientID, client := sess.RegisterClient(clientID, conn)
 		// If approval is not required and this is not the host, auto-approve
 		if !s.cfg.RequireApproval && clientID != types.HostClientID {
-			perm := types.Permission(s.cfg.DefaultPermission)
-			if perm != types.PermissionReadOnly && perm != types.PermissionReadWrite {
-				handlerCh.Log(alog.WARNING, "Misconfiguration: invalid default permission [%d]", perm)
-				perm = types.PermissionReadOnly
-			}
-			_ = sess.ApproveClient(clientID, perm)
+			handlerCh.Log(alog.DEBUG, "Auto-approving %s with permission %d", clientID, s.cfg.DefaultPermission)
+			_ = sess.ApproveClient(clientID, s.cfg.DefaultPermission)
 		}
 		return http.StatusOK, types.RegisterClientResponse{
 			ClientID: clientID,

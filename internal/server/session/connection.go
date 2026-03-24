@@ -30,41 +30,6 @@ func newConnection(conn *websocket.Conn) *Connection {
 	}
 }
 
-// Send a serialized message to the client
-func (c *Connection) SendMessage(mType types.WSMessageType, message interface{}) error {
-	if nil == c.conn {
-		return fmt.Errorf("no websocket")
-	}
-
-	// Serialize the message payload first
-	payloadBytes, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %v", err)
-	}
-
-	// Wrap in the WSMessage envelope
-	wsMsg := types.WSMessage{
-		Type:    mType,
-		Message: payloadBytes,
-	}
-
-	// Serialize to the WS wire format
-	data, err := json.Marshal(wsMsg)
-	if err != nil {
-		return fmt.Errorf("failed to serialize WebSocket message: %v", err)
-	}
-
-	select {
-	case c.send <- data:
-		return nil
-	case <-c.done:
-		return fmt.Errorf("connection closed, unable to send")
-	default:
-		// Channel full, drop message
-		return fmt.Errorf("connection full, unable to send")
-	}
-}
-
 // Close the connection
 func (c *Connection) Close() {
 	c.mu.Lock()
@@ -79,5 +44,44 @@ func (c *Connection) Close() {
 		if c.conn != nil {
 			c.conn.Close()
 		}
+	}
+}
+
+// Send a serialized message to the client
+// NOTE: Implemented as a free-function to support generic message type
+func SendConnectionMessage[T any](c *Connection, mType types.WSMessageType, message T) error {
+	if nil == c.conn {
+		return fmt.Errorf("no websocket")
+	}
+
+	// Serialize the message payload first
+	payloadBytes, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %v", err)
+	}
+	connCh.Log(alog.DEBUG4, "Serialized payload: %s", payloadBytes)
+
+	// Wrap in the WSMessage envelope
+	wsMsg := types.WSMessage{
+		Type:    mType,
+		Message: payloadBytes,
+	}
+
+	// Serialize to the WS wire format
+	data, err := json.Marshal(wsMsg)
+	if err != nil {
+		return fmt.Errorf("failed to serialize WebSocket message: %v", err)
+	}
+
+	connCh.Log(alog.DEBUG4, "Input data: %s", message)
+	connCh.Log(alog.DEBUG4, "Sending data on client connection: %s", data)
+	select {
+	case c.send <- data:
+		return nil
+	case <-c.done:
+		return fmt.Errorf("connection closed, unable to send")
+	default:
+		// Channel full, drop message
+		return fmt.Errorf("connection full, unable to send")
 	}
 }

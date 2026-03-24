@@ -132,9 +132,11 @@ func (wh *WebSocketHost) readPump(ctx context.Context) {
 			return
 		case <-wh.done:
 			return
+		default:
 		}
 
 		_, message, err := conn.ReadMessage()
+		wsHostCh.Log(alog.DEBUG3, "received websocket message: %v", message)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket read error: %v", err)
@@ -178,6 +180,7 @@ func (wh *WebSocketHost) writePump(ctx context.Context) {
 				return
 			}
 
+			wsHostCh.Log(alog.DEBUG4, "Sending websocket message: %v", message)
 			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
 				return
@@ -210,24 +213,30 @@ func (wh *WebSocketHost) handleMessage(msg types.WSMessage) {
 	switch msg.Type {
 	case types.WSMessageStdin:
 		if onStdin != nil {
-			var entry types.StdinEntry
-			if err := msg.UnmarshalMessage(&entry); err == nil {
-				onStdin(entry)
+			var entries []types.StdinEntry
+			if err := msg.UnmarshalMessage(&entries); err == nil {
+				for _, entry := range entries {
+					onStdin(entry)
+				}
 			}
 		}
 
 	case types.WSMessagePendingClient:
 		if onPendingClient != nil {
-			var clientID string
-			if err := msg.UnmarshalMessage(&clientID); err == nil {
-				onPendingClient(clientID)
+			var clientIDs []string
+			if err := msg.UnmarshalMessage(&clientIDs); err == nil {
+				for _, clientID := range clientIDs {
+					onPendingClient(clientID)
+				}
 			}
 		}
 
 	case types.WSMessageError:
-		var errMsg string
-		if err := msg.UnmarshalMessage(&errMsg); err == nil {
-			wsHostCh.Log(alog.DEBUG, "[remote-control] server error: %s", errMsg)
+		var errors []types.ErrorResponse
+		if err := msg.UnmarshalMessage(&errors); err == nil {
+			for _, e := range errors {
+				wsHostCh.Log(alog.DEBUG, "[remote-control] server error: %s", e.Error)
+			}
 		}
 	}
 }

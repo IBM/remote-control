@@ -111,7 +111,9 @@ func (ws *WebSocketConnection) readPump(ctx context.Context) {
 		default:
 		}
 
+		wsCh.Log(alog.DEBUG4, "waiting for ws message")
 		_, message, err := ws.conn.ReadMessage()
+		wsCh.Log(alog.DEBUG4, "got ws message")
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				wsCh.Log(alog.DEBUG, "WebSocket read error: %v", err)
@@ -174,12 +176,17 @@ func (ws *WebSocketConnection) writePump(ctx context.Context) {
 func (ws *WebSocketConnection) handleMessage(msg types.WSMessage) {
 	switch msg.Type {
 	case types.WSMessageOutput:
+		wsCh.Log(alog.DEBUG4, "Received output chunks: %s", msg)
 		// TODO --- handle this correctly!!!!!!!!!!!!
-		var payload types.OutputChunk
-		if err := msg.UnmarshalMessage(&payload); err == nil {
-			wsCh.Log(alog.DEBUG4, "Received output chunk: stream=%d, len=%d", payload.Stream, len(payload.Data))
-			if ws.handler != nil {
-				ws.handler(payload)
+		var payload []types.OutputChunk
+		if err := msg.UnmarshalMessage(&payload); err != nil {
+			wsCh.Log(alog.DEBUG, "Invalid output chunks received")
+		} else {
+			for _, chunk := range payload {
+				wsCh.Log(alog.DEBUG4, "Received output chunk: stream=%d, len=%d", chunk.Stream, len(chunk.Data))
+				if ws.handler != nil {
+					ws.handler(chunk)
+				}
 			}
 		}
 	}

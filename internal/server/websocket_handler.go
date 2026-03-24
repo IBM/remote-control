@@ -62,6 +62,7 @@ func (s *Server) writePump(client *session.SessionClient, conn *websocket.Conn) 
 	}()
 
 	for {
+		wsHandlerCh.Log(alog.DEBUG4, "Write pump tick")
 		select {
 		case message, ok := <-client.GetSendChan():
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -70,6 +71,7 @@ func (s *Server) writePump(client *session.SessionClient, conn *websocket.Conn) 
 				conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
+			wsHandlerCh.Log(alog.DEBUG4, "Sending websocket message: %s", message)
 
 			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
@@ -187,5 +189,5 @@ func (s *Server) sendErrorJSON(client *session.SessionClient, v any) {
 
 func (s *Server) sendError(client *session.SessionClient, message string) {
 	payload := types.ErrorResponse{Error: message}
-	client.Send(types.WSMessageError, payload)
+	session.Send(client, types.WSMessageError, payload)
 }
