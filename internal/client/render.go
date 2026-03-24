@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 
@@ -13,10 +12,8 @@ const ansiRed = "\033[31m"
 const ansiReset = "\033[0m"
 
 func renderChunk(chunk types.OutputChunk) {
-	data, err := base64.StdEncoding.DecodeString(string(chunk.Data))
-	if err != nil {
-		data = chunk.Data
-	}
+	// chunk.Data is already decoded from base64 by OutputChunk.UnmarshalJSON
+	data := chunk.Data
 
 	isRawMode := term.IsTerminal(int(os.Stdin.Fd()))
 
