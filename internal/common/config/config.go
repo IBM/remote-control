@@ -48,6 +48,8 @@ type Config struct {
 	WSFailureThreshold     int    `json:"ws_failure_threshold"`
 	WSFailureWindow        int    `json:"ws_failure_window_seconds"`
 	WSUpgradeCheckInterval int    `json:"ws_upgrade_check_interval_seconds"`
+	WSReconnectDelay       int    `json:"ws_reconnect_delay"`
+	WSMaxReconnectDelay    int    `json:"ws_max_reconnect_delay"`
 
 	Log LoggingConfig `json:"log"`
 }
@@ -67,6 +69,8 @@ func defaults() *Config {
 		WSFailureThreshold:     3,
 		WSFailureWindow:        60,
 		WSUpgradeCheckInterval: 10,
+		WSReconnectDelay:       1,
+		WSMaxReconnectDelay:    30,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

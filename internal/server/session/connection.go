@@ -3,54 +3,49 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gorilla/websocket"
 
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
 var connCh = alog.UseChannel("CONN")
 
-// Connection implements the WebSocket for a given client
+// Connection wraps a WebSocketPipe for use within a session client.
+// It provides send/done channel access and message sending helpers.
 type Connection struct {
-	conn *websocket.Conn
-	send chan []byte
-	mu   sync.RWMutex
-	done chan struct{}
+	pipe    *ws.WebSocketPipe
+	hasConn bool // true when backed by a real websocket connection
 }
 
-// NewConnection creates a new Connection
+// newConnection creates a new Connection wrapping a WebSocketPipe.
 func newConnection(conn *websocket.Conn) *Connection {
 	return &Connection{
-		conn: conn,
-		send: make(chan []byte, 256),
-		done: make(chan struct{}),
+		pipe:    ws.NewPipe(conn),
+		hasConn: conn != nil,
 	}
 }
 
 // Close the connection
 func (c *Connection) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	select {
-	case <-c.done:
-		// Already closed
-		return
-	default:
-		close(c.done)
-		close(c.send)
-		if c.conn != nil {
-			c.conn.Close()
-		}
-	}
+	c.pipe.Close()
 }
 
-// Send a serialized message to the client
-// NOTE: Implemented as a free-function to support generic message type
-func SendConnectionMessage[T any](c *Connection, mType types.WSMessageType, message T) error {
-	if nil == c.conn {
+// GetSendChan returns the underlying send channel.
+func (c *Connection) GetSendChan() chan []byte {
+	return c.pipe.SendChan()
+}
+
+// GetDoneChan returns the underlying done channel.
+func (c *Connection) GetDoneChan() chan struct{} {
+	return c.pipe.DoneChan()
+}
+
+// SendMessage sends a serialized message to the client.
+func (c *Connection) SendMessage(mType types.WSMessageType, message any) error {
+	if !c.hasConn {
 		return fmt.Errorf("no websocket")
 	}
 
@@ -75,13 +70,5 @@ func SendConnectionMessage[T any](c *Connection, mType types.WSMessageType, mess
 
 	connCh.Log(alog.DEBUG4, "Input data: %s", message)
 	connCh.Log(alog.DEBUG4, "Sending data on client connection: %s", data)
-	select {
-	case c.send <- data:
-		return nil
-	case <-c.done:
-		return fmt.Errorf("connection closed, unable to send")
-	default:
-		// Channel full, drop message
-		return fmt.Errorf("connection full, unable to send")
-	}
+	return c.pipe.Send(data)
 }

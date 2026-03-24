@@ -6,49 +6,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
-	"github.com/gorilla/websocket"
+	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
 var wsHostCh = alog.UseChannel("WS_HOST")
 
 // WebSocketHost manages the host's WebSocket connection to the server
 type WebSocketHost struct {
+	pipe *ws.WebSocketPipe
+
 	url       string
 	tlsConfig *tls.Config
-	conn      *websocket.Conn
 	sessionID string
 	clientID  string
 
 	onStdinHandler         func(types.StdinEntry)
 	onPendingClientHandler func(string)
 
-	reconnectAttempts int
-	reconnectDelay    time.Duration
-	maxReconnectDelay time.Duration
-
-	send chan []byte
-	done chan struct{}
-	mu   sync.RWMutex
-
-	connected atomic.Bool
+	mu sync.RWMutex
 }
 
 // NewWebSocketHost creates a new WebSocketHost instance
 func NewWebSocketHost(url string, tlsConfig *tls.Config, sessionID, clientID string) *WebSocketHost {
 	return &WebSocketHost{
-		url:               url,
-		tlsConfig:         tlsConfig,
-		sessionID:         sessionID,
-		clientID:          clientID,
-		reconnectDelay:    1 * time.Second,
-		maxReconnectDelay: 30 * time.Second,
-		send:              make(chan []byte, 256),
-		done:              make(chan struct{}),
+		url:       url,
+		tlsConfig: tlsConfig,
+		sessionID: sessionID,
+		clientID:  clientID,
 	}
 }
 
@@ -68,139 +55,37 @@ func (wh *WebSocketHost) OnPendingClient(handler func(string)) {
 
 // IsConnected returns whether the WebSocket is currently connected
 func (wh *WebSocketHost) IsConnected() bool {
-	return wh.connected.Load()
+	if wh.pipe == nil {
+		return false
+	}
+	return wh.pipe.IsConnected()
 }
 
 // Connect establishes the WebSocket connection
 func (wh *WebSocketHost) Connect(ctx context.Context) error {
-	wh.mu.Lock()
-	if wh.connected.Load() {
-		wh.mu.Unlock()
+	if wh.pipe != nil && wh.pipe.IsConnected() {
 		return nil
-	}
-	wh.mu.Unlock()
-
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
-	if wh.tlsConfig != nil {
-		dialer.TLSClientConfig = wh.tlsConfig
 	}
 
 	wsURL := wh.url + "/ws/" + wh.sessionID
 	if wh.clientID != "" {
 		wsURL += "?client_id=" + wh.clientID
 	}
-	conn, _, err := dialer.Dial(wsURL, nil)
+
+	pipe, err := ws.Dial(ctx, wsURL, wh.tlsConfig)
 	if err != nil {
-		return fmt.Errorf("WebSocket dial failed: %w", err)
+		return err
 	}
 
-	wh.mu.Lock()
-	wh.conn = conn
-	wh.connected.Store(true)
-	wh.reconnectAttempts = 0
-	wh.mu.Unlock()
+	wh.pipe = pipe
+	pipe.OnMessage(wh.handleMessage)
+	pipe.OnDisconnect(func() {
+		wsHostCh.Log(alog.INFO, "[remote-control] Host WebSocket disconnected")
+	})
+	pipe.Start(ctx)
 
 	wsHostCh.Log(alog.INFO, "[remote-control] Host WebSocket connected to %s", wh.url)
-
-	go wh.readPump(ctx)
-	go wh.writePump(ctx)
-
 	return nil
-}
-
-// readPump reads messages from the WebSocket
-func (wh *WebSocketHost) readPump(ctx context.Context) {
-	defer func() {
-		wh.handleDisconnect(ctx)
-	}()
-
-	wh.mu.RLock()
-	conn := wh.conn
-	wh.mu.RUnlock()
-
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-wh.done:
-			return
-		default:
-		}
-
-		_, message, err := conn.ReadMessage()
-		wsHostCh.Log(alog.DEBUG3, "received websocket message: %v", message)
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket read error: %v", err)
-			}
-			return
-		}
-
-		var msg types.WSMessage
-		if err := json.Unmarshal(message, &msg); err != nil {
-			wsHostCh.Log(alog.DEBUG, "[remote-control] invalid JSON in WebSocket message: %v", err)
-			continue
-		}
-
-		wh.handleMessage(msg)
-	}
-}
-
-// writePump writes messages to the WebSocket
-func (wh *WebSocketHost) writePump(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-wh.done:
-			return
-		case message, ok := <-wh.send:
-			wh.mu.RLock()
-			conn := wh.conn
-			wh.mu.RUnlock()
-
-			if conn == nil {
-				return
-			}
-
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			wsHostCh.Log(alog.DEBUG4, "Sending websocket message: %v", message)
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
-				return
-			}
-
-		case <-ticker.C:
-			wh.mu.RLock()
-			conn := wh.conn
-			wh.mu.RUnlock()
-
-			if conn == nil {
-				return
-			}
-
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-		}
-	}
 }
 
 // handleMessage processes incoming WebSocket messages
@@ -241,21 +126,12 @@ func (wh *WebSocketHost) handleMessage(msg types.WSMessage) {
 	}
 }
 
-// handleDisconnect handles connection loss
-func (wh *WebSocketHost) handleDisconnect(ctx context.Context) {
-	wh.mu.Lock()
-	wh.connected.Store(false)
-	if wh.conn != nil {
-		wh.conn.Close()
-		wh.conn = nil
-	}
-	wh.mu.Unlock()
-
-	wsHostCh.Log(alog.INFO, "[remote-control] Host WebSocket disconnected")
-}
-
 // SendOutput sends output data via WebSocket
 func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte) error {
+	if wh.pipe == nil {
+		return fmt.Errorf("not connected")
+	}
+
 	wsHostCh.Log(alog.DEBUG4, "sending output on stream %d: %v", stream, data)
 	payload := types.OutputChunk{
 		Stream: stream,
@@ -266,8 +142,6 @@ func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte) error {
 	if err != nil {
 		return err
 	}
-	wsHostCh.Log(alog.DEBUG4, "payload bytes: %v", payloadBytes)
-	wsHostCh.Log(alog.DEBUG4, "payload json: %s", payloadBytes)
 
 	msg := types.WSMessage{
 		Type:    types.WSMessageOutput,
@@ -278,37 +152,15 @@ func (wh *WebSocketHost) SendOutput(stream types.Stream, data []byte) error {
 	if err != nil {
 		return err
 	}
-	wsHostCh.Log(alog.DEBUG4, "full bytes: %v", msgData)
 	wsHostCh.Log(alog.DEBUG4, "full json: %s", msgData)
 
-	select {
-	case wh.send <- msgData:
-		return nil
-	case <-wh.done:
-		return fmt.Errorf("connection closed")
-	default:
-		return fmt.Errorf("send buffer full")
-	}
+	return wh.pipe.Send(msgData)
 }
 
 // Close closes the WebSocket connection
 func (wh *WebSocketHost) Close() error {
-	wh.mu.Lock()
-	defer wh.mu.Unlock()
-
-	select {
-	case <-wh.done:
+	if wh.pipe == nil {
 		return nil
-	default:
-		close(wh.done)
 	}
-
-	if wh.conn != nil {
-		wh.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		wh.conn.Close()
-		wh.conn = nil
-	}
-
-	wh.connected.Store(false)
-	return nil
+	return wh.pipe.Close()
 }

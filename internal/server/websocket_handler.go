@@ -1,15 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 	"github.com/gabe-l-hart/remote-control/internal/server/session"
-	"github.com/gorilla/websocket"
 )
 
 var wsHandlerCh = alog.UseChannel("WS_HANDLER")
@@ -46,102 +46,38 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start read and write pumps
-	go s.readPump(client, conn, sessionID, clientID)
-	go s.writePump(client, conn)
-}
-
-/* -- Read/Write Pumps ------------------------------------------------------ */
-
-// writePump writes messages to the WebSocket connection
-func (s *Server) writePump(client *session.SessionClient, conn *websocket.Conn) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer func() {
-		ticker.Stop()
-		conn.Close()
-	}()
-
-	for {
-		wsHandlerCh.Log(alog.DEBUG4, "Write pump tick")
-		select {
-		case message, ok := <-client.GetSendChan():
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				// Channel closed
-				conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			wsHandlerCh.Log(alog.DEBUG4, "Sending websocket message: %s", message)
-
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket write error: %v", err)
-				return
-			}
-
-		case <-ticker.C:
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-
-		case <-client.GetDoneChan():
-			return
-		}
-	}
-}
-
-// readPump reads messages from the WebSocket connection
-func (s *Server) readPump(client *session.SessionClient, conn *websocket.Conn, sessionID, clientID string) {
-	//GLG!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	//TODO: Create a proactive deferred unregister through the stack
-	// defer func() {
-	// 	s.sess.Unregister(clientID)
-	// }()
-
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
+	// Create a pipe using the client's existing send/done channels and start
+	// the read/write pumps
+	pipe := ws.NewPipeWithChannels(conn, client.GetSendChan(), client.GetDoneChan())
+	pipe.OnMessage(func(msg types.WSMessage) {
+		s.handleServerMessage(msg, client, sessionID, clientID)
 	})
+	pipe.Start(context.Background())
+}
 
-	for {
-		_, message, err := conn.ReadMessage()
-		wsHandlerCh.Log(alog.DEBUG4, "Received websocket bytes: %v", message)
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				wsHandlerCh.Log(alog.DEBUG, "WebSocket read error: %v", err)
-			}
-			break
+// handleServerMessage dispatches incoming WebSocket messages to the
+// appropriate handler based on message type.
+func (s *Server) handleServerMessage(msg types.WSMessage, client *session.SessionClient, sessionID, clientID string) {
+	wsHandlerCh.Log(alog.DEBUG4, "Payload bytes: %v", msg.Message)
+
+	switch msg.Type {
+	case types.WSMessageOutput:
+		wsHandlerCh.Log(alog.DEBUG3, "Received output")
+		if err := s.handleAppendOutputWS(msg, client, sessionID, clientID); err != nil {
+			wsHandlerCh.Log(alog.DEBUG, "output append error: %v", err)
+			s.sendError(client, err.Error())
 		}
 
-		var msg types.WSMessage
-		if err := json.Unmarshal(message, &msg); err != nil {
-			wsHandlerCh.Log(alog.DEBUG, "invalid JSON in WebSocket message: %v", err)
-			s.sendError(client, "invalid message format")
-			continue
+	case types.WSMessageStdin:
+		wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit")
+		if err := s.handleStdinSubmitWS(msg, client, sessionID, clientID); err != nil {
+			wsHandlerCh.Log(alog.DEBUG, "stdin submit error: %v", err)
+			s.sendError(client, err.Error())
 		}
-		wsHandlerCh.Log(alog.DEBUG4, "Payload bytes: %v", msg.Message)
 
-		// Handle message based on type
-		switch msg.Type {
-		case types.WSMessageOutput:
-			wsHandlerCh.Log(alog.DEBUG3, "Received output")
-			if err := s.handleAppendOutputWS(msg, client, sessionID, clientID); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "output append error: %v", err)
-				s.sendError(client, err.Error())
-			}
-
-		case types.WSMessageStdin:
-			wsHandlerCh.Log(alog.DEBUG3, "Received stdin submit")
-			if err := s.handleStdinSubmitWS(msg, client, sessionID, clientID); err != nil {
-				wsHandlerCh.Log(alog.DEBUG, "stdin submit error: %v", err)
-				s.sendError(client, err.Error())
-			}
-
-		default:
-			wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %d", msg.Type)
-			s.sendError(client, "unknown message type")
-		}
+	default:
+		wsHandlerCh.Log(alog.DEBUG, "[remote-control] unknown message type: %d", msg.Type)
+		s.sendError(client, "unknown message type")
 	}
 }
 

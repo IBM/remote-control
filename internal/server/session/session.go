@@ -43,12 +43,12 @@ func newSessionClient(clientID string, approval types.ApprovalStatus, conn *webs
 
 // Get the connection's send channel
 func (c *SessionClient) GetSendChan() chan []byte {
-	return c.conn.send
+	return c.conn.GetSendChan()
 }
 
 // Get the connection's done channel
 func (c *SessionClient) GetDoneChan() chan struct{} {
-	return c.conn.done
+	return c.conn.GetDoneChan()
 }
 
 // Get all elements from a queue, marking them as peeked but don't remove them
@@ -118,7 +118,7 @@ func Send[T any](c *SessionClient, mType types.WSMessageType, message T) {
 	}
 
 	// Attempt to send to the connection and clear the queue if successful
-	if nil == SendConnectionMessage(c.conn, mType, payload) {
+	if nil == c.conn.SendMessage(mType, payload) {
 		q = make([]queuedMessage, 0)
 	}
 	c.msgQs[mType] = q
@@ -238,6 +238,9 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 
 	// If the client identifies itself as the host, update the host connection
 	if clientID == types.HostClientID {
+		if s.hostConn.conn != nil {
+			s.hostConn.conn.Close()
+		}
 		s.hostConn.conn = newConnection(conn)
 		s.hostConn.Info.JoinedAt = time.Now()
 		sessCh.Log(alog.DEBUG, "Updated host websocket connection")
