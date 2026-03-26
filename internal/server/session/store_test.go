@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gorilla/websocket"
 )
 
@@ -56,7 +57,7 @@ func TestNewStoreNegativeBuffer(t *testing.T) {
 func TestCreateSessionWithoutID(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestCreateSessionWithID(t *testing.T) {
 	store := NewStore(1024)
 	customID := "custom-session-123"
 
-	sess, err := store.Create(&customID, nil)
+	sess, err := store.Create(&customID, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -81,12 +82,12 @@ func TestCreateSessionWithID(t *testing.T) {
 func TestCreateSessionUniqueIDs(t *testing.T) {
 	store := NewStore(1024)
 
-	sess1, err := store.Create(nil, nil)
+	sess1, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create sess1 failed: %v", err)
 	}
 
-	sess2, err := store.Create(nil, nil)
+	sess2, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create sess2 failed: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestCreateSessionWithConnection(t *testing.T) {
 	store := NewStore(1024)
 
 	// Pass nil connection for unit test
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestCreateSessionWithConnection(t *testing.T) {
 func TestCreateSessionNilConnection(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestCreateSessionNilConnection(t *testing.T) {
 func TestGetSessionExists(t *testing.T) {
 	store := NewStore(1024)
 
-	created, err := store.Create(nil, nil)
+	created, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestGetSessionAfterCreate(t *testing.T) {
 	store := NewStore(1024)
 	customID := "test-session"
 
-	_, err := store.Create(&customID, nil)
+	_, err := store.Create(&customID, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestGetSessionAfterCreate(t *testing.T) {
 func TestGetSessionAfterDelete(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -211,12 +212,12 @@ func TestListSessionsEmpty(t *testing.T) {
 func TestListSessionsMultiple(t *testing.T) {
 	store := NewStore(1024)
 
-	_, err := store.Create(nil, nil)
+	_, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create sess1 failed: %v", err)
 	}
 
-	_, err = store.Create(nil, nil)
+	_, err = store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create sess2 failed: %v", err)
 	}
@@ -233,8 +234,8 @@ func TestListSessionsMultiple(t *testing.T) {
 func TestListSessionsAfterDelete(t *testing.T) {
 	store := NewStore(1024)
 
-	sess1, _ := store.Create(nil, nil)
-	sess2, _ := store.Create(nil, nil)
+	sess1, _ := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
+	sess2, _ := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 
 	err := store.Delete(sess1.Info.ID)
 	if err != nil {
@@ -260,7 +261,7 @@ func TestListSessionsAfterDelete(t *testing.T) {
 func TestDeleteSessionExists(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -289,7 +290,7 @@ func TestDeleteSessionNotFound(t *testing.T) {
 func TestDeleteSessionIdempotent(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -322,7 +323,7 @@ func TestConcurrentCreate(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			sess, err := store.Create(nil, nil)
+			sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 			if err != nil {
 				t.Errorf("Create failed: %v", err)
 				return
@@ -354,7 +355,7 @@ func TestConcurrentCreate(t *testing.T) {
 func TestConcurrentGetAndDelete(t *testing.T) {
 	store := NewStore(1024)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -403,7 +404,7 @@ func TestConcurrentListAndCreate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				_, _ = store.Create(nil, nil)
+				_, _ = store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 			}
 		}()
 	}
@@ -424,7 +425,7 @@ func TestConcurrentMultipleOperations(t *testing.T) {
 			defer wg.Done()
 
 			// Create
-			sess, err := store.Create(nil, nil)
+			sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 			if err != nil {
 				return
 			}
@@ -452,7 +453,7 @@ func TestCreateSessionWithEmptyID(t *testing.T) {
 	store := NewStore(1024)
 	emptyID := ""
 
-	sess, err := store.Create(&emptyID, nil)
+	sess, err := store.Create(&emptyID, nil, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -485,7 +486,7 @@ func TestStoreMaxOutputBufferPropagation(t *testing.T) {
 	maxBuffer := 2048
 	store := NewStore(maxBuffer)
 
-	sess, err := store.Create(nil, nil)
+	sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: maxBuffer})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -508,7 +509,7 @@ func TestHighVolumeSessionCreation(t *testing.T) {
 	numSessions := 1000
 
 	for i := 0; i < numSessions; i++ {
-		_, err := store.Create(nil, nil)
+		_, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 		if err != nil {
 			t.Fatalf("Create failed at iteration %d: %v", i, err)
 		}
@@ -532,7 +533,7 @@ func TestRapidCreateAndDelete(t *testing.T) {
 	store := NewStore(1024)
 
 	for i := 0; i < 100; i++ {
-		sess, err := store.Create(nil, nil)
+		sess, err := store.Create(nil, nil, &config.Config{MaxOutputBuffer: 1024})
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
@@ -564,7 +565,7 @@ func TestCreateSessionWithWebSocketConnection(t *testing.T) {
 	// For unit tests, we pass nil
 	var conn *websocket.Conn = nil
 
-	sess, err := store.Create(nil, conn)
+	sess, err := store.Create(nil, conn, &config.Config{MaxOutputBuffer: 1024})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

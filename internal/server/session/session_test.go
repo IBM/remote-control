@@ -7,6 +7,7 @@ import (
 	"time"
 
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
 )
 
 // ============================================================================
@@ -16,7 +17,7 @@ import (
 func TestNewSession(t *testing.T) {
 	id := "test-session"
 	maxBuffer := 1024
-	sess := newSession(id, maxBuffer, nil)
+	sess := newSession(id, nil, &config.Config{MaxOutputBuffer: maxBuffer})
 
 	if sess == nil {
 		t.Fatal("expected non-nil session")
@@ -43,7 +44,7 @@ func TestNewSession(t *testing.T) {
 
 func TestNewSessionWithMaxOutputBuffer(t *testing.T) {
 	maxBuffer := 2048
-	sess := newSession("test", maxBuffer, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: maxBuffer})
 
 	if sess.maxOutputBuffer != maxBuffer {
 		t.Errorf("expected maxOutputBuffer %d, got %d", maxBuffer, sess.maxOutputBuffer)
@@ -51,7 +52,7 @@ func TestNewSessionWithMaxOutputBuffer(t *testing.T) {
 }
 
 func TestNewSessionHostConnection(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	if sess.hostConn == nil {
 		t.Fatal("expected host connection to be initialized")
@@ -65,7 +66,7 @@ func TestNewSessionHostConnection(t *testing.T) {
 }
 
 func TestNewSessionEmptyClients(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	if len(sess.clients) != 0 {
 		t.Errorf("expected 0 clients initially, got %d", len(sess.clients))
@@ -74,7 +75,7 @@ func TestNewSessionEmptyClients(t *testing.T) {
 
 func TestNewSessionInfo(t *testing.T) {
 	id := "test-session-123"
-	sess := newSession(id, 1024, nil)
+	sess := newSession(id, nil, &config.Config{MaxOutputBuffer: 1024})
 
 	if sess.Info.ID != id {
 		t.Errorf("ID mismatch")
@@ -98,7 +99,7 @@ func TestNewSessionInfo(t *testing.T) {
 // ============================================================================
 
 func TestAppendOutputStdout(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	data := []byte("stdout data")
 	sess.AppendOutput(types.StreamStdout, data)
@@ -115,7 +116,7 @@ func TestAppendOutputStdout(t *testing.T) {
 }
 
 func TestAppendOutputStderr(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	data := []byte("stderr data")
 	sess.AppendOutput(types.StreamStderr, data)
@@ -129,7 +130,7 @@ func TestAppendOutputStderr(t *testing.T) {
 }
 
 func TestAppendOutputEmptyData(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	sess.AppendOutput(types.StreamStdout, []byte{})
 
@@ -139,7 +140,7 @@ func TestAppendOutputEmptyData(t *testing.T) {
 }
 
 func TestAppendOutputMultipleChunks(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	sess.AppendOutput(types.StreamStdout, []byte("chunk1"))
 	sess.AppendOutput(types.StreamStdout, []byte("chunk2"))
@@ -152,7 +153,7 @@ func TestAppendOutputMultipleChunks(t *testing.T) {
 
 func TestAppendOutputBufferTruncation(t *testing.T) {
 	maxBuffer := 5
-	sess := newSession("test", maxBuffer, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: maxBuffer})
 
 	// Add more chunks than the buffer can hold
 	for i := 0; i < 10; i++ {
@@ -166,7 +167,7 @@ func TestAppendOutputBufferTruncation(t *testing.T) {
 
 func TestAppendOutputNoTruncation(t *testing.T) {
 	maxBuffer := 10
-	sess := newSession("test", maxBuffer, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: maxBuffer})
 
 	// Add fewer chunks than the buffer can hold
 	for i := 0; i < 5; i++ {
@@ -179,7 +180,7 @@ func TestAppendOutputNoTruncation(t *testing.T) {
 }
 
 func TestAppendOutputZeroMaxBuffer(t *testing.T) {
-	sess := newSession("test", 0, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 0})
 
 	// With zero max buffer, no truncation should occur
 	for i := 0; i < 10; i++ {
@@ -196,7 +197,7 @@ func TestAppendOutputZeroMaxBuffer(t *testing.T) {
 // ============================================================================
 
 func TestAppendOutputNotSentToHost(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	// Host queue should be empty before append
 	hostQueue := sess.hostConn.GetAllQueue(types.WSMessageOutput)
@@ -218,7 +219,7 @@ func TestAppendOutputNotSentToHost(t *testing.T) {
 // ============================================================================
 
 func TestEnqueueStdin(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	data := []byte("stdin data")
 	sess.EnqueueStdin(data)
@@ -231,7 +232,7 @@ func TestEnqueueStdin(t *testing.T) {
 }
 
 func TestEnqueueStdinMultipleEntries(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	sess.EnqueueStdin([]byte("entry1"))
 	sess.EnqueueStdin([]byte("entry2"))
@@ -244,7 +245,7 @@ func TestEnqueueStdinMultipleEntries(t *testing.T) {
 }
 
 func TestEnqueueStdinDataCopied(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	original := []byte("test data")
 	sess.EnqueueStdin(original)
@@ -273,7 +274,7 @@ func TestEnqueueStdinDataCopied(t *testing.T) {
 // ============================================================================
 
 func TestRegisterClient(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, client := sess.RegisterClient("", nil)
 
@@ -289,7 +290,7 @@ func TestRegisterClient(t *testing.T) {
 }
 
 func TestRegisterClientPendingStatus(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	_, client := sess.RegisterClient("", nil)
 
@@ -299,7 +300,7 @@ func TestRegisterClientPendingStatus(t *testing.T) {
 }
 
 func TestRegisterClientUniqueIDs(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	id1, _ := sess.RegisterClient("", nil)
 	id2, _ := sess.RegisterClient("", nil)
@@ -310,23 +311,23 @@ func TestRegisterClientUniqueIDs(t *testing.T) {
 }
 
 func TestRegisterClientNotifiesHost(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024, RequireApproval: true})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
-	// Check host's pending client queue
-	queue := sess.hostConn.GetAllQueue(types.WSMessagePendingClient)
+	// Check host's pending client queue - the notification is queued for the host to poll
+	queue := sess.PeekClientQueue(types.HostClientID, types.WSMessagePendingClient)
 	if len(queue) != 1 {
-		t.Errorf("expected 1 pending client notification, got %d", len(queue))
+		t.Fatalf("expected 1 pending client notification, got %d", len(queue))
 	}
 
-	if queue[0] != clientID {
+	if queue[0].(string) != clientID {
 		t.Errorf("expected client ID %s in queue, got %v", clientID, queue[0])
 	}
 }
 
 func TestRegisterClientIdentifiesHost(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	// Register with host client ID
 	hostClientID, hostClient := sess.RegisterClient(types.HostClientID, nil)
@@ -354,7 +355,7 @@ func TestRegisterClientIdentifiesHost(t *testing.T) {
 // ============================================================================
 
 func TestApproveClient(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -373,7 +374,7 @@ func TestApproveClient(t *testing.T) {
 }
 
 func TestApproveClientWithReadOnly(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -389,7 +390,7 @@ func TestApproveClientWithReadOnly(t *testing.T) {
 }
 
 func TestApproveClientNotFound(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	err := sess.ApproveClient("nonexistent", types.PermissionReadWrite)
 	if err == nil {
@@ -402,7 +403,7 @@ func TestApproveClientNotFound(t *testing.T) {
 // ============================================================================
 
 func TestDenyClient(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -418,7 +419,7 @@ func TestDenyClient(t *testing.T) {
 }
 
 func TestDenyClientNotFound(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	err := sess.DenyClient("nonexistent")
 	if err == nil {
@@ -431,7 +432,7 @@ func TestDenyClientNotFound(t *testing.T) {
 // ============================================================================
 
 func TestGetClientExists(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -445,7 +446,7 @@ func TestGetClientExists(t *testing.T) {
 }
 
 func TestGetClientNotFound(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	client := sess.GetClient("nonexistent")
 	if client != nil {
@@ -454,7 +455,7 @@ func TestGetClientNotFound(t *testing.T) {
 }
 
 func TestGetClientHost(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	client := sess.GetClient(types.HostClientID)
 	if client == nil {
@@ -470,7 +471,7 @@ func TestGetClientHost(t *testing.T) {
 // ============================================================================
 
 func TestPeekClientQueueEmpty(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -481,7 +482,7 @@ func TestPeekClientQueueEmpty(t *testing.T) {
 }
 
 func TestClearClientQueue(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	_, _ = sess.RegisterClient("", nil)
 
@@ -506,7 +507,7 @@ func TestClearClientQueue(t *testing.T) {
 // ============================================================================
 
 func TestComplete(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	exitCode := 0
 	sess.Complete(exitCode)
@@ -523,7 +524,7 @@ func TestComplete(t *testing.T) {
 }
 
 func TestCompleteExitCode(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	sess.Complete(42)
 
@@ -533,7 +534,7 @@ func TestCompleteExitCode(t *testing.T) {
 }
 
 func TestCompleteTimestamp(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	before := time.Now()
 	sess.Complete(0)
@@ -553,7 +554,7 @@ func TestCompleteTimestamp(t *testing.T) {
 // ============================================================================
 
 func TestRemoveInactiveClients(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -578,7 +579,7 @@ func TestRemoveInactiveClients(t *testing.T) {
 }
 
 func TestRemoveInactiveClientsNoneRemoved(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, _ := sess.RegisterClient("", nil)
 
@@ -596,7 +597,7 @@ func TestRemoveInactiveClientsNoneRemoved(t *testing.T) {
 }
 
 func TestRemoveInactiveClientsMultiple(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	// Register multiple clients
 	id1, _ := sess.RegisterClient("", nil)
@@ -624,7 +625,7 @@ func TestRemoveInactiveClientsMultiple(t *testing.T) {
 // ============================================================================
 
 func TestConcurrentAppendOutput(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -645,7 +646,7 @@ func TestConcurrentAppendOutput(t *testing.T) {
 }
 
 func TestConcurrentEnqueueStdin(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -667,7 +668,7 @@ func TestConcurrentEnqueueStdin(t *testing.T) {
 }
 
 func TestConcurrentClientRegistration(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	var wg sync.WaitGroup
 	numGoroutines := 10
@@ -703,7 +704,7 @@ func TestConcurrentClientRegistration(t *testing.T) {
 // ============================================================================
 
 func TestAckOnlyClearsPeekedMessages(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, client := sess.RegisterClient("", nil)
 
@@ -712,7 +713,7 @@ func TestAckOnlyClearsPeekedMessages(t *testing.T) {
 		Stream: types.StreamStdout,
 		Data:   []byte("chunk1"),
 	}
-	client.Send(types.WSMessageOutput, chunk1)
+	Send(client, types.WSMessageOutput, chunk1)
 
 	// Step 2: Poll (peek) the queue - marks chunk1 as peeked
 	polled := sess.PeekClientQueue(clientID, types.WSMessageOutput)
@@ -725,7 +726,7 @@ func TestAckOnlyClearsPeekedMessages(t *testing.T) {
 		Stream: types.StreamStdout,
 		Data:   []byte("chunk2"),
 	}
-	client.Send(types.WSMessageOutput, chunk2)
+	Send(client, types.WSMessageOutput, chunk2)
 
 	// Step 4: Ack (should only clear the peeked message - chunk1)
 	sess.ClearClientQueue(clientID, types.WSMessageOutput)
@@ -749,7 +750,7 @@ func TestAckOnlyClearsPeekedMessages(t *testing.T) {
 }
 
 func TestAckWithoutPeekPreservesAllMessages(t *testing.T) {
-	sess := newSession("test", 1024, nil)
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
 
 	clientID, client := sess.RegisterClient("", nil)
 
@@ -759,7 +760,7 @@ func TestAckWithoutPeekPreservesAllMessages(t *testing.T) {
 			Stream: types.StreamStdout,
 			Data:   []byte(fmt.Sprintf("chunk%d", i)),
 		}
-		client.Send(types.WSMessageOutput, chunk)
+		Send(client, types.WSMessageOutput, chunk)
 	}
 
 	// Clear the queue without peeking first (simulating a bug or misbehavior)
