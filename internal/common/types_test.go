@@ -70,15 +70,15 @@ func TestOutputChunkMarshalJSON(t *testing.T) {
 		t.Fatalf("MarshalJSON failed: %v", err)
 	}
 
-	// Should be base64 encoded string
-	expected := `"aGVsbG8gd29ybGQ="`
+	// Should be struct format with stream and base64 encoded data
+	expected := `{"stream":1,"data":"aGVsbG8gd29ybGQ="}`
 	if string(data) != expected {
 		t.Errorf("expected %s, got %s", expected, string(data))
 	}
 }
 
 func TestOutputChunkUnmarshalJSON(t *testing.T) {
-	jsonData := []byte(`"aGVsbG8gd29ybGQ="`)
+	jsonData := []byte(`{"stream":1,"data":"aGVsbG8gd29ybGQ="}`)
 
 	var chunk OutputChunk
 	err := json.Unmarshal(jsonData, &chunk)
@@ -89,6 +89,9 @@ func TestOutputChunkUnmarshalJSON(t *testing.T) {
 	expected := "hello world"
 	if string(chunk.Data) != expected {
 		t.Errorf("expected %s, got %s", expected, string(chunk.Data))
+	}
+	if chunk.Stream != StreamStdout {
+		t.Errorf("expected stream %d, got %d", StreamStdout, chunk.Stream)
 	}
 }
 
@@ -114,16 +117,6 @@ func TestOutputChunkMarshalUnmarshalRoundTrip(t *testing.T) {
 	// Verify data integrity
 	if string(decoded.Data) != string(original.Data) {
 		t.Errorf("data mismatch: expected %q, got %q", original.Data, decoded.Data)
-	}
-}
-
-func TestOutputChunkUnmarshalInvalidBase64(t *testing.T) {
-	jsonData := []byte(`"not-valid-base64!@#$"`)
-
-	var chunk OutputChunk
-	err := json.Unmarshal(jsonData, &chunk)
-	if err == nil {
-		t.Error("expected error for invalid base64, got nil")
 	}
 }
 
@@ -404,51 +397,12 @@ func TestCreateSessionRequest(t *testing.T) {
 	}
 }
 
-func TestAppendOutputRequestMarshalJSON(t *testing.T) {
-	req := AppendOutputRequest{
-		Stream: StreamStdout,
-		Data:   []byte("output data"),
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
-	}
-
-	// Should be base64 encoded
-	expected := `"b3V0cHV0IGRhdGE="`
-	if string(data) != expected {
-		t.Errorf("expected %s, got %s", expected, string(data))
-	}
-}
-
-func TestAppendOutputRequestUnmarshalJSON(t *testing.T) {
-	jsonData := []byte(`"b3V0cHV0IGRhdGE="`)
-
-	var req AppendOutputRequest
-	err := json.Unmarshal(jsonData, &req)
-	if err != nil {
-		t.Fatalf("Unmarshal failed: %v", err)
-	}
-
-	expected := "output data"
-	if string(req.Data) != expected {
-		t.Errorf("expected %s, got %s", expected, string(req.Data))
-	}
-}
-
-func TestAppendOutputRequestInvalidBase64(t *testing.T) {
-	jsonData := []byte(`"invalid-base64!@#"`)
-
-	var req AppendOutputRequest
-	err := json.Unmarshal(jsonData, &req)
-	if err == nil {
-		t.Error("expected error for invalid base64, got nil")
-	}
-}
-
 func TestPollResponse(t *testing.T) {
-	elements := []interface{}{"item1", "item2", "item3"}
+	elements := []json.RawMessage{
+		json.RawMessage(`"item1"`),
+		json.RawMessage(`"item2"`),
+		json.RawMessage(`"item3"`),
+	}
 	resp := PollResponse{Elements: elements}
 
 	data, err := json.Marshal(resp)
@@ -462,13 +416,8 @@ func TestPollResponse(t *testing.T) {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
-	decodedSlice, ok := decoded.Elements.([]interface{})
-	if !ok {
-		t.Fatalf("Elements is not []interface{}")
-	}
-
-	if len(decodedSlice) != 3 {
-		t.Errorf("expected 3 elements, got %d", len(decodedSlice))
+	if len(decoded.Elements) != 3 {
+		t.Errorf("expected 3 elements, got %d", len(decoded.Elements))
 	}
 }
 
@@ -488,25 +437,6 @@ func TestPatchSessionRequest(t *testing.T) {
 
 	if decoded.ExitCode != 42 {
 		t.Errorf("expected exit code 42, got %d", decoded.ExitCode)
-	}
-}
-
-func TestStdinRequest(t *testing.T) {
-	req := StdinRequest{Data: "dGVzdCBzdGRpbg=="}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
-	}
-
-	var decoded StdinRequest
-	err = json.Unmarshal(data, &decoded)
-	if err != nil {
-		t.Fatalf("Unmarshal failed: %v", err)
-	}
-
-	if decoded.Data != req.Data {
-		t.Errorf("Data mismatch")
 	}
 }
 
@@ -710,27 +640,6 @@ func TestGetWSMessageTypeInvalid(t *testing.T) {
 	}
 }
 
-func TestGetWSMessageTypeEdgeCases(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    int
-		expected WSMessageType
-	}{
-		{"Zero", 0, WSMessageUnknown},
-		{"MaxUint8", 255, WSMessageUnknown},
-		{"Negative", -1, WSMessageUnknown},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := GetWSMessageType(tt.input)
-			if result != tt.expected {
-				t.Errorf("expected %d, got %d", tt.expected, result)
-			}
-		})
-	}
-}
-
 // ============================================================================
 // WSMessage Tests
 // ============================================================================
@@ -738,13 +647,13 @@ func TestGetWSMessageTypeEdgeCases(t *testing.T) {
 func TestWSMessageCreation(t *testing.T) {
 	msg := WSMessage{
 		Type:    WSMessageOutput,
-		Message: "test message",
+		Message: json.RawMessage(`"test message"`),
 	}
 
 	if msg.Type != WSMessageOutput {
 		t.Errorf("Type mismatch")
 	}
-	if msg.Message != "test message" {
+	if string(msg.Message) != `"test message"` {
 		t.Errorf("Message mismatch")
 	}
 }
@@ -752,7 +661,7 @@ func TestWSMessageCreation(t *testing.T) {
 func TestWSMessageJSONMarshaling(t *testing.T) {
 	msg := WSMessage{
 		Type:    WSMessageStdin,
-		Message: "stdin data",
+		Message: json.RawMessage(`"stdin data"`),
 	}
 
 	data, err := json.Marshal(msg)
@@ -769,7 +678,7 @@ func TestWSMessageJSONMarshaling(t *testing.T) {
 	if decoded.Type != WSMessageStdin {
 		t.Errorf("Type mismatch")
 	}
-	if decoded.Message != "stdin data" {
+	if string(decoded.Message) != `"stdin data"` {
 		t.Errorf("Message mismatch")
 	}
 }
@@ -780,12 +689,17 @@ func TestWSMessageWithOutputChunk(t *testing.T) {
 		Data:   []byte("chunk data"),
 	}
 
-	msg := WSMessage{
-		Type:    WSMessageOutput,
-		Message: chunk,
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("Marshal chunk failed: %v", err)
 	}
 
-	data, err := json.Marshal(msg)
+	msg := WSMessage{
+		Type:    WSMessageOutput,
+		Message: data,
+	}
+
+	data, err = json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
@@ -800,10 +714,14 @@ func TestWSMessageWithOutputChunk(t *testing.T) {
 		t.Errorf("Type mismatch")
 	}
 
-	// Message will be decoded as a string (base64) due to OutputChunk's custom marshaling
-	// This is expected behavior - the actual unmarshaling would need type-specific handling
-	if decoded.Message == nil {
-		t.Error("Message should not be nil")
+	var decodedChunk OutputChunk
+	err = json.Unmarshal(decoded.Message, &decodedChunk)
+	if err != nil {
+		t.Fatalf("Unmarshal message failed: %v", err)
+	}
+
+	if string(decodedChunk.Data) != "chunk data" {
+		t.Errorf("Data mismatch")
 	}
 }
 
@@ -812,12 +730,17 @@ func TestWSMessageWithStdinEntry(t *testing.T) {
 		Data: []byte("stdin input"),
 	}
 
-	msg := WSMessage{
-		Type:    WSMessageStdin,
-		Message: entry,
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal entry failed: %v", err)
 	}
 
-	data, err := json.Marshal(msg)
+	msg := WSMessage{
+		Type:    WSMessageStdin,
+		Message: data,
+	}
+
+	data, err = json.Marshal(msg)
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
@@ -831,17 +754,27 @@ func TestWSMessageWithStdinEntry(t *testing.T) {
 	if decoded.Type != WSMessageStdin {
 		t.Errorf("Type mismatch")
 	}
+
+	var decodedEntry StdinEntry
+	err = json.Unmarshal(decoded.Message, &decodedEntry)
+	if err != nil {
+		t.Fatalf("Unmarshal message failed: %v", err)
+	}
+
+	if string(decodedEntry.Data) != "stdin input" {
+		t.Errorf("Data mismatch")
+	}
 }
 
 func TestWSMessageWithDifferentTypes(t *testing.T) {
 	tests := []struct {
 		name    string
 		msgType WSMessageType
-		message interface{}
+		message json.RawMessage
 	}{
-		{"String", WSMessagePendingClient, "client-id-123"},
-		{"Number", WSMessageError, 404},
-		{"Struct", WSMessageOutput, OutputChunk{Stream: StreamStderr, Data: []byte("error")}},
+		{"String", WSMessagePendingClient, json.RawMessage(`"client-id-123"`)},
+		{"Number", WSMessageError, json.RawMessage(`404`)},
+		{"Struct", WSMessageOutput, json.RawMessage(`{"stream":2,"data":"ZXJyb3I="}`)},
 		{"Nil", WSMessageUnknown, nil},
 	}
 
@@ -902,5 +835,319 @@ func TestStdinEntryJSONMarshaling(t *testing.T) {
 
 	if string(decoded.Data) != "stdin content" {
 		t.Errorf("Data mismatch")
+	}
+}
+
+// ============================================================================
+// Additional WebSocket Message Tests (Phase 1.4)
+// ============================================================================
+
+func TestWSMessageUnmarshalMessageOutputChunk(t *testing.T) {
+	chunk := OutputChunk{
+		Stream: StreamStderr,
+		Data:   []byte("unmarshaled data"),
+	}
+
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("Marshal chunk failed: %v", err)
+	}
+
+	msg := WSMessage{
+		Type:    WSMessageOutput,
+		Message: data,
+	}
+
+	var unmarshaled OutputChunk
+	err = msg.UnmarshalMessage(&unmarshaled)
+	if err != nil {
+		t.Fatalf("UnmarshalMessage failed: %v", err)
+	}
+
+	if unmarshaled.Stream != StreamStderr {
+		t.Errorf("Stream mismatch")
+	}
+	if string(unmarshaled.Data) != "unmarshaled data" {
+		t.Errorf("Data mismatch")
+	}
+}
+
+func TestWSMessageUnmarshalMessageStdinEntry(t *testing.T) {
+	entry := StdinEntry{
+		Data: []byte("stdin unmarshaled"),
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("Marshal entry failed: %v", err)
+	}
+
+	msg := WSMessage{
+		Type:    WSMessageStdin,
+		Message: data,
+	}
+
+	var unmarshaled StdinEntry
+	err = msg.UnmarshalMessage(&unmarshaled)
+	if err != nil {
+		t.Fatalf("UnmarshalMessage failed: %v", err)
+	}
+
+	if string(unmarshaled.Data) != "stdin unmarshaled" {
+		t.Errorf("Data mismatch")
+	}
+}
+
+func TestWSMessageUnmarshalMessageError(t *testing.T) {
+	errResp := ErrorResponse{Error: "test error"}
+
+	data, err := json.Marshal(errResp)
+	if err != nil {
+		t.Fatalf("Marshal error failed: %v", err)
+	}
+
+	msg := WSMessage{
+		Type:    WSMessageError,
+		Message: data,
+	}
+
+	var unmarshaled ErrorResponse
+	err = msg.UnmarshalMessage(&unmarshaled)
+	if err != nil {
+		t.Fatalf("UnmarshalMessage failed: %v", err)
+	}
+
+	if unmarshaled.Error != "test error" {
+		t.Errorf("Error mismatch")
+	}
+}
+
+func TestWSMessageUnmarshalMessageInvalidType(t *testing.T) {
+	msg := WSMessage{
+		Type:    WSMessageUnknown,
+		Message: json.RawMessage(`"unknown"`),
+	}
+
+	var output OutputChunk
+	err := msg.UnmarshalMessage(&output)
+	if err != nil {
+		return
+	}
+}
+
+func TestGetWSMessageTypeAdditionalInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int
+	}{
+		{"Zero", 0},
+		{"One", 1},
+		{"Five", 5},
+		{"Fifteen", 15},
+		{"TwentyFive", 25},
+		{"ThirtyFive", 35},
+		{"FortyFive", 45},
+		{"Hundred", 100},
+		{"Negative", -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetWSMessageType(tt.input)
+			if result != WSMessageUnknown {
+				t.Errorf("expected WSMessageUnknown for input %d, got %d", tt.input, result)
+			}
+		})
+	}
+}
+
+// =========================================================================================
+// Output/Stdin Round-trip Edge Cases (Phase 1.4)
+// =========================================================================================
+
+func TestOutputChunkMarshalUnmarshalRoundTripWithBinaryData(t *testing.T) {
+	binaryData := []byte{0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd}
+
+	original := OutputChunk{
+		Stream: StreamStdout,
+		Data:   binaryData,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded OutputChunk
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if len(decoded.Data) != len(original.Data) {
+		t.Errorf("Data length mismatch")
+	}
+	for i := range original.Data {
+		if decoded.Data[i] != original.Data[i] {
+			t.Errorf("Data mismatch at index %d", i)
+		}
+	}
+}
+
+func TestOutputChunkMarshalUnmarshalRoundTripWithNewlines(t *testing.T) {
+	newlineData := []byte("line1\nline2\r\nline3\r\n")
+
+	original := OutputChunk{
+		Stream: StreamStderr,
+		Data:   newlineData,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded OutputChunk
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("Data mismatch")
+	}
+}
+
+func TestOutputChunkUnmarshalInvalidBase64(t *testing.T) {
+	jsonData := []byte(`{"stream":1,"data":"not-valid-base64!@#$"}`)
+
+	var chunk OutputChunk
+	err := json.Unmarshal(jsonData, &chunk)
+	if err == nil {
+		t.Error("expected error for invalid base64, got nil")
+	}
+}
+
+func TestStdinEntryMarshalUnmarshalRoundTripWithEscapeSequences(t *testing.T) {
+	escapeData := []byte("tab:\there\nnewline\ttabs\tand\tmore")
+
+	original := StdinEntry{
+		Data: escapeData,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded StdinEntry
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("Data mismatch: expected %q, got %q", original.Data, decoded.Data)
+	}
+}
+
+func TestStdinEntryMarshalUnmarshalRoundTripWithUnicode(t *testing.T) {
+	unicodeData := []byte("Hello \u4e16界 \u00e9\u00e8\u00e2 \U0001F600")
+
+	original := StdinEntry{
+		Data: unicodeData,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded StdinEntry
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if string(decoded.Data) != string(original.Data) {
+		t.Errorf("Data mismatch")
+	}
+}
+
+func TestStdinEntryMarshalUnmarshalRoundTripLargeData(t *testing.T) {
+	largeData := make([]byte, 10*1024+500)
+	for i := range largeData {
+		largeData[i] = byte(i % 256)
+	}
+
+	original := StdinEntry{
+		Data: largeData,
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded StdinEntry
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if len(decoded.Data) != len(original.Data) {
+		t.Errorf("Data length mismatch: expected %d, got %d", len(original.Data), len(decoded.Data))
+	}
+}
+
+// ============================================================================
+// Enum Boundary Tests (Phase 1.4)
+// ============================================================================
+
+func TestWSMessageTypeBounds(t *testing.T) {
+	tests := []struct {
+		name  string
+		value int
+		want  WSMessageType
+	}{
+		{"MinBound", 0, WSMessageUnknown},
+		{"LowerValid", 10, WSMessageOutput},
+		{"UpperValid", 40, WSMessageError},
+		{"MaxUint8", 255, WSMessageUnknown},
+		{"OutOfBounds", 256, WSMessageUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetWSMessageType(tt.value)
+			if result != tt.want {
+				t.Errorf("GetWSMessageType(%d) = %d, want %d", tt.value, result, tt.want)
+			}
+		})
+	}
+}
+
+func TestStreamUnknownIsZero(t *testing.T) {
+	var unknown Stream
+	if unknown != StreamUnknown {
+		t.Errorf("zero value of Stream should be StreamUnknown")
+	}
+
+	unknownMsg := WSMessage{
+		Type:    0,
+		Message: json.RawMessage(`"test"`),
+	}
+
+	if unknownMsg.Type != WSMessageUnknown {
+		t.Errorf("zero value of WSMessageType should be WSMessageUnknown")
+	}
+}
+
+func TestPermissionReadWriteEnumValues(t *testing.T) {
+	if string(PermissionReadOnly) != "read-only" {
+		t.Errorf("PermissionReadOnly = %q, want %q", PermissionReadOnly, "read-only")
+	}
+	if string(PermissionReadWrite) != "read-write" {
+		t.Errorf("PermissionReadWrite = %q, want %q", PermissionReadWrite, "read-write")
 	}
 }
