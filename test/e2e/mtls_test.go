@@ -9,10 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gabe-l-hart/remote-control/internal/api"
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/session"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/server"
 )
 
 // mtlsServer starts a TLS server with client cert verification.
@@ -39,9 +38,8 @@ func mtlsServer(t *testing.T, dir string) (serverURL, serverCAFile, clientCAFile
 		t.Fatalf("generate client CA: %v", err)
 	}
 
-	store, _ := session.NewStore("memory", session.StoreOptions{})
-	cfg := &config.Config{RequireApproval: false}
-	srv := api.NewServer("127.0.0.1:0", store, cfg)
+	cfg := &config.Config{RequireApproval: false, MaxOutputBuffer: 1024}
+	srv := server.NewServer("127.0.0.1:0", cfg)
 
 	tlsCfg, err := tlsconfig.BuildServerTLSConfig(serverCert, serverKey, clientCAcert)
 	if err != nil {
