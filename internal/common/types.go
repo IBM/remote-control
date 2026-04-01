@@ -17,6 +17,18 @@ const (
 	StreamStderr  Stream = 2
 )
 
+// Stream String helper for logging/display only
+func (s Stream) String() string {
+	switch s {
+	case StreamStdout:
+		return "stdout"
+	case StreamStderr:
+		return "stderr"
+	default:
+		return "unknown"
+	}
+}
+
 // Status is the lifecycle state of a session.
 type SessionStatus uint8
 
@@ -27,8 +39,21 @@ const (
 	SessionStatusError     SessionStatus = 3
 )
 
-// OutputChunk is a single contiguous block of data from a subprocess output
-// stream.
+// SessionStatus String helper for logging/display only
+func (s SessionStatus) String() string {
+	switch s {
+	case SessionStatusActive:
+		return "active"
+	case SessionStatusCompleted:
+		return "completed"
+	case SessionStatusError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+// OutputChunk is a single contiguous block of data from a subprocess output stream.
 type OutputChunk struct {
 	Stream Stream
 	Data   []byte
