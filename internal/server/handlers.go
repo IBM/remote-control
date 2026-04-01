@@ -136,7 +136,7 @@ func (s *Server) handlePoll(sessionID, clientID string, mType types.WSMessageTyp
 
 	// Peek at the queue for the given session
 	queued := sess.PeekClientQueue(clientID, mType)
-	elements := make([]json.RawMessage, len(queued))
+	elements := make([]json.RawMessage, 0, len(queued))
 	for _, elt := range queued {
 		if eltBytes, err := json.Marshal(elt); nil != err {
 			return http.StatusInternalServerError, types.ErrorResponse{Error: err.Error()}
