@@ -55,7 +55,7 @@ func (wh *WebSocketHost) OnPendingClient(handler func(string)) {
 
 // IsConnected returns whether the WebSocket is currently connected
 func (wh *WebSocketHost) IsConnected() bool {
-	if wh.pipe == nil {
+	if wh == nil || wh.pipe == nil {
 		return false
 	}
 	return wh.pipe.IsConnected()
