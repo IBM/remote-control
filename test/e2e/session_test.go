@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 func TestFullSessionLifecycle(t *testing.T) {
@@ -52,9 +54,9 @@ func TestFullSessionLifecycle(t *testing.T) {
 
 	// 3. Append output chunks.
 	now := time.Now()
-	for i, stream := range []string{"stdout", "stderr"} {
-		data := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s chunk %d", stream, i)))
-		body, _ := json.Marshal(map[string]string{
+	for i, stream := range []types.Stream{types.StreamStdout, types.StreamStderr} {
+		data := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s chunk %d", stream.String(), i)))
+		body, _ := json.Marshal(map[string]any{
 			"stream":    stream,
 			"data":      data,
 			"timestamp": now.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
@@ -68,7 +70,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	// 4. Poll output using message type 10 (WSMessageOutput).
 	var poll struct {
 		Chunks []struct {
-			Stream string `json:"stream"`
+			Stream uint8  `json:"stream"`
 			Data   string `json:"data"`
 		} `json:"elements"`
 	}
@@ -97,8 +99,8 @@ func TestFullSessionLifecycle(t *testing.T) {
 	if len(poll.Chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d: %+v", len(poll.Chunks), poll.Chunks)
 	}
-	if poll.Chunks[0].Stream != "stdout" {
-		t.Errorf("expected first chunk stdout, got %q", poll.Chunks[0].Stream)
+	if poll.Chunks[0].Stream != uint8(types.StreamStdout) {
+		t.Errorf("expected first chunk stdout (%d), got %d", types.StreamStdout, poll.Chunks[0].Stream)
 	}
 
 	// 5. Complete the session.
@@ -110,13 +112,13 @@ func TestFullSessionLifecycle(t *testing.T) {
 		t.Fatalf("patch session: %v", err)
 	}
 	var patchResult struct {
-		Status string `json:"status"`
+		Status int `json:"status"`
 	}
 	json.NewDecoder(patchResp.Body).Decode(&patchResult)
 	patchResp.Body.Close()
 
-	if patchResult.Status != "completed" {
-		t.Errorf("expected completed status in PATCH response, got %q", patchResult.Status)
+	if patchResult.Status != 2 { // SessionStatusCompleted = 2
+		t.Errorf("expected status 2 (completed) in PATCH response, got %d", patchResult.Status)
 	}
 
 	// 6. Verify session is deleted from memory after completion.
