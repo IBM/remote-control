@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // LoggingConfig holds the key configuration elements for logging
@@ -33,11 +34,11 @@ type Config struct {
 	ServerTLS TLSBundle `json:"server_tls"`
 	ClientTLS TLSBundle `json:"client_tls"`
 
-	RequireApproval       bool   `json:"require_approval"`
-	DefaultPermission     string `json:"default_permission"`
-	PollIntervalMs        int    `json:"poll_interval_ms"`
-	ClientTimeoutSeconds  int    `json:"client_timeout_seconds"`
-	MaxInitialBufferBytes int64  `json:"max_initial_buffer_bytes"`
+	RequireApproval      bool             `json:"require_approval"`
+	DefaultPermission    types.Permission `json:"default_permission"`
+	PollIntervalMs       int              `json:"poll_interval_ms"`
+	ClientTimeoutSeconds int              `json:"client_timeout_seconds"`
+	MaxOutputBuffer      int              `json:"max_output_buffer"`
 
 	// WebSocket configuration
 	EnableWebSocket        bool   `json:"enable_websocket"`
@@ -47,6 +48,8 @@ type Config struct {
 	WSFailureThreshold     int    `json:"ws_failure_threshold"`
 	WSFailureWindow        int    `json:"ws_failure_window_seconds"`
 	WSUpgradeCheckInterval int    `json:"ws_upgrade_check_interval_seconds"`
+	WSReconnectDelay       int    `json:"ws_reconnect_delay"`
+	WSMaxReconnectDelay    int    `json:"ws_max_reconnect_delay"`
 
 	Log LoggingConfig `json:"log"`
 }
@@ -58,17 +61,16 @@ func defaults() *Config {
 		ConfigDir:              configDir,
 		ServerURL:              "https://localhost:8443",
 		RequireApproval:        false,
-		DefaultPermission:      "read-write",
+		DefaultPermission:      types.PermissionReadWrite,
 		PollIntervalMs:         100,
 		ClientTimeoutSeconds:   60,
-		MaxInitialBufferBytes:  1024 * 1024, // 1MB default
+		MaxOutputBuffer:        1024 * 1024, // 1MB default w/ 1 byte chunks
 		EnableWebSocket:        true,
-		WebSocketPath:          "/ws",
-		WebSocketPingInterval:  30,
-		WebSocketPongTimeout:   10,
 		WSFailureThreshold:     3,
 		WSFailureWindow:        60,
 		WSUpgradeCheckInterval: 10,
+		WSReconnectDelay:       1,
+		WSMaxReconnectDelay:    30,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

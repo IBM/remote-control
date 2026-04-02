@@ -1,4 +1,4 @@
-package api
+package server
 
 import (
 	"bufio"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 var middlewareCh = alog.UseChannel("ENDPOINT")
@@ -48,7 +49,7 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				middlewareCh.Log(alog.ERROR, "PANIC: %v\n%s", rec, debug.Stack())
-				writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal server error"})
+				writeJSON(w, http.StatusInternalServerError, types.ErrorResponse{Error: "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)

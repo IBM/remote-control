@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 // mockWriter captures writes for inspection in tests.
@@ -75,7 +77,7 @@ func TestProxyOutputWritesLocally(t *testing.T) {
 	go func() {
 		defer close(done)
 		// Pass nil client and nil WebSocketHost — proxyOutput will log the append error but continue writing locally.
-		h.proxyOutput(ctx, pr, localDst, nil, "test-session", "stdout", nil)
+		h.proxyOutput(ctx, pr, localDst, nil, "test-session", types.StreamStdout, nil)
 	}()
 
 	pw.Write([]byte("hello world")) //nolint:errcheck

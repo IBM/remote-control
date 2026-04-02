@@ -4,6 +4,10 @@
 build:
 	go build .
 
+# Build without optimizations (debug)
+build.debug:
+	go build -tags=debug -o remote-control.debug
+
 build.android:
 	GOOS=android GOARCH=arm64 go build -o remote-control-android .
 

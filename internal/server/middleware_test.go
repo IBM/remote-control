@@ -1,10 +1,12 @@
-package api
+package server
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
 func TestRecoveryMiddlewareCatchesPanic(t *testing.T) {
@@ -21,7 +23,7 @@ func TestRecoveryMiddlewareCatchesPanic(t *testing.T) {
 	if rr.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rr.Code)
 	}
-	var resp ErrorResponse
+	var resp types.ErrorResponse
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}

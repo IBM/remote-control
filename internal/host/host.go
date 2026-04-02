@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,8 +18,10 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/tlsconfig"
+	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
 var ch = alog.UseChannel("HOST")
@@ -28,7 +29,7 @@ var ch = alog.UseChannel("HOST")
 // Host manages the subprocess lifecycle and I/O proxying.
 type Host struct {
 	cfg    *config.Config
-	client *APIClient
+	client *types.APIClient
 
 	// WebSocket connection for real-time communication
 	wsHost *WebSocketHost
@@ -40,7 +41,7 @@ type Host struct {
 
 	// PTY-mode subprocess management.
 	// subprocessPid is set once in runPTY before goroutines start; safe to read
-	// without synchronisation (goroutine-start provides the happens-before edge).
+	// without synchronization (goroutine-start provides the happens-before edge).
 	subprocessPid int
 	// pauseOutput suppresses PTY→stdout forwarding during approval prompts so
 	// that the subprocess's TUI cannot re-render over the prompt text.
@@ -52,7 +53,7 @@ func NewHost(cfg *config.Config) *Host {
 	httpClient := buildHTTPClient(cfg)
 	return &Host{
 		cfg:    cfg,
-		client: NewAPIClient(cfg.ServerURL, httpClient),
+		client: types.NewAPIClient(cfg.ServerURL, httpClient),
 	}
 }
 
@@ -109,8 +110,10 @@ func (h *Host) Run(ctx context.Context, command []string) error {
 	defer cancel()
 
 	if term.IsTerminal(int(os.Stdin.Fd())) {
+		ch.Log(alog.INFO, "Running in PTY mode")
 		return h.runPTY(proxyCtx, cancel, command, sessionID)
 	}
+	ch.Log(alog.INFO, "Running in pipe mode")
 	return h.runPipe(proxyCtx, cancel, command, sessionID)
 }
 
@@ -167,16 +170,24 @@ func (h *Host) runPTY(ctx context.Context, cancel context.CancelFunc, command []
 		}
 	}()
 
-	// Track offsets for output
-	var stdoutOffset int64
-	var stdoutOffsetMu sync.Mutex
+	// Set up WebSocket stdin handler now that ptmx is available
+	if h.wsHost != nil {
+		h.wsHost.OnStdin(func(entry types.StdinEntry) {
+			ch.Log(alog.DEBUG, "Processing WS stdin: %d bytes", len(entry.Data))
+			ptmxMu.Lock()
+			defer ptmxMu.Unlock()
+			if _, err := ptmx.Write(entry.Data); err != nil {
+				ch.Log(alog.DEBUG, "WS stdin write error: %v", err)
+			}
+		})
+	}
 
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID, h.wsHost, &stdoutOffset, &stdoutOffsetMu)
+		h.proxyPTYOutput(ctx, ptmx, h.client, sessionID, h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -264,18 +275,28 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 		return fmt.Errorf("start subprocess: %w", err)
 	}
 
+	// Set up WebSocket stdin handler now that stdinPipe is available
+	if h.wsHost != nil {
+		h.wsHost.OnStdin(func(entry types.StdinEntry) {
+			ch.Log(alog.DEBUG, "Processing WS stdin: %d bytes", len(entry.Data))
+			if _, err := stdinPipe.Write(entry.Data); err != nil {
+				ch.Log(alog.DEBUG, "WS stdin write error: %v", err)
+			}
+		})
+	}
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, "stdout", h.wsHost)
+		h.proxyOutput(ctx, stdoutPipe, os.Stdout, h.client, sessionID, types.StreamStdout, h.wsHost)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, "stderr", h.wsHost)
+		h.proxyOutput(ctx, stderrPipe, os.Stderr, h.client, sessionID, types.StreamStderr, h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -352,25 +373,26 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 		return
 	}
 
-	// Derive WebSocket URL from ServerURL
-	wsURL := h.deriveWebSocketURL(h.cfg.ServerURL)
-
 	// Build TLS config if available
 	tlsCfg := buildTLSConfig(h.cfg)
 
+	// Derive WebSocket URL from ServerURL
+	wsURL := ws.DeriveWebSocketURL(h.cfg.ServerURL)
+	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
+
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, "host")
+	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, types.HostClientID)
 
-	// Set up stdin pending handler
-	h.wsHost.OnStdinPending(func(entry StdinEntry) {
-		// WebSocket will broadcast pending stdin entries
-		// This will replace the polling mechanism
+	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
+	h.wsHost.OnPendingClient(func(clientID string) {
+		if !h.cfg.RequireApproval {
+			return
+		}
+		h.handleClientApproval(ctx, sessionID, clientID, true)
 	})
 
-	// Set up error handler
-	h.wsHost.OnError(func(err error) {
-		ch.Log(alog.DEBUG, "[remote-control] WebSocket error: %v", err)
-	})
+	// NOTE: The actual OnStdin handler is set in runPTY/runPipe after
+	// the write target (ptmx/stdinPipe) is available.
 
 	err := h.wsHost.Connect(ctx)
 	if err != nil {
@@ -379,27 +401,18 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	}
 }
 
-// deriveWebSocketURL converts http(s):// URLs to ws(s):// URLs
-func (h *Host) deriveWebSocketURL(httpURL string) string {
-	parsed, err := url.Parse(httpURL)
-	if err != nil {
-		return httpURL
-	}
-
-	if parsed.Scheme == "https" {
-		parsed.Scheme = "wss"
-	} else if parsed.Scheme == "http" {
-		parsed.Scheme = "ws"
-	}
-
-	return parsed.String()
-}
-
-// closeWebSocket gracefully closes the WebSocket connection.
 func (h *Host) closeWebSocket() {
 	if h.wsHost != nil {
 		h.wsHost.Close()
 	}
+}
+
+// pollClientApprovals handles client approval notifications.
+// Uses HTTP polling as fallback when WebSocket is disconnected.
+func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
+	// Always use the poll/ack fallback for client approvals
+	// WebSocket callbacks are handled by the WebSocket readPump
+	h.pollPendingClients(ctx, sessionID, rawMode)
 }
 
 // armApprovalChannel marks the host as waiting for an approval byte and returns
@@ -423,32 +436,6 @@ func (h *Host) disarmApprovalChannel() {
 	h.approvalMu.Unlock()
 }
 
-// pollClientApprovals polls the server for pending client join requests and
-// prompts the host user (via side-channel) to approve or deny each one.
-func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMode bool) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if !h.cfg.RequireApproval {
-				continue
-			}
-			clients, err := h.client.ListPendingClients(sessionID)
-			if err != nil {
-				ch.Log(alog.DEBUG, "[remote-control] list pending clients error: %v", err)
-				continue
-			}
-			for _, client := range clients {
-				h.handleClientApproval(ctx, sessionID, client.ClientID, client.CommonName, rawMode)
-			}
-		}
-	}
-}
-
 // handleClientApproval prompts the host user to approve or deny a client.
 //
 // For PTY-mode subprocesses (subprocessPid != 0) the subprocess is paused with
@@ -458,7 +445,7 @@ func (h *Host) pollClientApprovals(ctx context.Context, sessionID string, rawMod
 //
 // The approval channel is armed before writing the prompt to eliminate the race
 // window between displaying the prompt and starting to capture the response byte.
-func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, commonName string, rawMode bool) {
+func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID string, rawMode bool) {
 	// 1. Arm the approval channel BEFORE writing the prompt.
 	respCh := h.armApprovalChannel()
 	defer h.disarmApprovalChannel()
@@ -475,7 +462,7 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 	}
 
 	// 3. Write the approval prompt.
-	h.writeSideChannel(rawMode, "\n[remote-control] Client %q (%s) wants to join.\n", commonName, clientID)
+	h.writeSideChannel(rawMode, "\n[remote-control] Client (%s) wants to join.\n", clientID)
 	h.writeSideChannel(rawMode, "  [a] approve read-write  [r] read-only  [d] deny: ")
 
 	// 4. Wait for the operator's response byte.
@@ -502,21 +489,21 @@ func (h *Host) handleClientApproval(ctx context.Context, sessionID, clientID, co
 			if err := h.client.ApproveClient(sessionID, clientID, "read-write"); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-write)\n", clientID)
 				done = true
 			}
 		case 'r', 'R':
 			if err := h.client.ApproveClient(sessionID, clientID, "read-only"); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] approve client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q approved (read-only)\n", clientID)
 				done = true
 			}
 		case 'd', 'D':
 			if err := h.client.DenyClient(sessionID, clientID); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] deny client error: %v", err)
 			} else {
-				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", commonName)
+				h.writeSideChannel(rawMode, "[remote-control] Client %q denied\n", clientID)
 				done = true
 			}
 		default:

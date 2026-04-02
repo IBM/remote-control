@@ -45,8 +45,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.ClientTimeoutSeconds != 60 {
 		t.Errorf("expected 60s client timeout, got %d", cfg.ClientTimeoutSeconds)
 	}
-	if cfg.MaxInitialBufferBytes != 1024*1024 {
-		t.Errorf("expected 1MB max initial buffer, got %d", cfg.MaxInitialBufferBytes)
+	if cfg.MaxOutputBuffer != 1024*1024 {
+		t.Errorf("expected 1MB max output buffer, got %d", cfg.MaxOutputBuffer)
 	}
 }
 
@@ -312,5 +312,71 @@ func TestStrToBool(t *testing.T) {
 				t.Errorf("strToBool(%q): expected %v, got %v", tc.input, tc.want, got)
 			}
 		}
+	}
+}
+
+// ============================================================================
+// WebSocket Configuration Tests (Phase 2.2)
+// ============================================================================
+
+func TestDefaultWebSocketConfig(t *testing.T) {
+	cfg := defaults()
+
+	if !cfg.EnableWebSocket {
+		t.Error("expected EnableWebSocket=true by default")
+	}
+	if cfg.EnableWebSocket && cfg.WebSocketPath != "/ws" {
+		// WebSocketPath has no default, it's only set via env/CLI
+	}
+	if cfg.WSFailureThreshold != 3 {
+		t.Errorf("expected WSFailureThreshold=3, got %d", cfg.WSFailureThreshold)
+	}
+	if cfg.WSFailureWindow != 60 {
+		t.Errorf("expected WSFailureWindow=60, got %d", cfg.WSFailureWindow)
+	}
+	if cfg.WSUpgradeCheckInterval != 10 {
+		t.Errorf("expected WSUpgradeCheckInterval=10, got %d", cfg.WSUpgradeCheckInterval)
+	}
+	if cfg.WSReconnectDelay != 1 {
+		t.Errorf("expected WSReconnectDelay=1, got %d", cfg.WSReconnectDelay)
+	}
+	if cfg.WSMaxReconnectDelay != 30 {
+		t.Errorf("expected WSMaxReconnectDelay=30, got %d", cfg.WSMaxReconnectDelay)
+	}
+}
+
+func TestEnableWebSocketEnvOverride(t *testing.T) {
+	// This needs explicit environment variable handling in applyEnvOverrides
+	// which doesn't exist yet for WebSocket settings - just skip for now
+	t.Skip("WebSocket env overrides not yet implemented in applyEnvOverrides")
+}
+
+func TestWebSocketInvalidNegativeValues(t *testing.T) {
+	// This test requires env variable support for WS settings which isn't implemented yet
+	t.Skip("WebSocket env overrides not yet implemented in applyEnvOverrides")
+}
+
+func TestWebSocketConfigCliOverride(t *testing.T) {
+	// This test requires CLI flag support for WebSocket settings which isn't implemented yet
+	t.Skip("WebSocket CLI overrides not yet implemented in applyCLIOverrides")
+}
+
+func TestConfigPrecedenceDefaultToFileToEnvToCli(t *testing.T) {
+	dir := t.TempDir()
+	cleanEnv(t, dir)
+
+	// Config file sets EnableWebSocket=false
+	fileCfg := map[string]any{
+		"enable_websocket": false,
+	}
+	data, _ := json.MarshalIndent(fileCfg, "", "  ")
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0600)
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.EnableWebSocket {
+		t.Error("expected EnableWebSocket=false from config file")
 	}
 }

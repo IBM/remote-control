@@ -10,9 +10,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gabe-l-hart/remote-control/internal/api"
-	"github.com/gabe-l-hart/remote-control/internal/config"
-	"github.com/gabe-l-hart/remote-control/internal/session"
+	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/server"
 )
 
 // testServer starts a real HTTP server on a free port and returns its URL.
@@ -20,8 +19,7 @@ import (
 func testServer(t *testing.T) string {
 	t.Helper()
 
-	store, _ := session.NewStore("memory", session.StoreOptions{})
-	cfg := &config.Config{RequireApproval: false}
+	cfg := &config.Config{RequireApproval: false, MaxOutputBuffer: 1024}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -29,7 +27,7 @@ func testServer(t *testing.T) string {
 	}
 	addr := ln.Addr().String()
 
-	srv := api.NewServer(addr, store, cfg)
+	srv := server.NewServer(addr, cfg)
 	go func() {
 		// Serve on the pre-bound listener.
 		hs := &http.Server{Handler: srv.Handler()}
