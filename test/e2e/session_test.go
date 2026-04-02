@@ -22,7 +22,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	}
 	var session struct {
 		ID     string `json:"id"`
-		Status string `json:"status"`
+		Status int    `json:"status"`
 	}
 	json.NewDecoder(resp.Body).Decode(&session)
 	resp.Body.Close()
@@ -30,8 +30,8 @@ func TestFullSessionLifecycle(t *testing.T) {
 	if session.ID == "" {
 		t.Fatal("expected session ID")
 	}
-	if session.Status != "active" {
-		t.Errorf("expected active, got %q", session.Status)
+	if session.Status != 1 { // SessionStatusActive = 1
+		t.Errorf("expected status 1 (active), got %d", session.Status)
 	}
 
 	// 2. Register a client.
