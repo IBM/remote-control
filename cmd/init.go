@@ -62,13 +62,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	genCerts, _ := reader.ReadString('\n')
 	genCerts = strings.TrimSpace(strings.ToLower(genCerts))
 
-	cfg := &config.Config{
-		ConfigDir:         home,
-		ServerURL:         serverURL,
-		RequireApproval:   true,
-		DefaultPermission: "read-write",
-		PollIntervalMs:    500,
-	}
+	cfg := config.Defaults()
+	cfg.ConfigDir = home
+	cfg.ServerURL = serverURL
 
 	if genCerts == "" || genCerts == "y" || genCerts == "yes" {
 		if err := os.MkdirAll(home, 0700); err != nil {
