@@ -1,5 +1,17 @@
-.claude/settings.local.json
 remote-control
 remote-control-android
 coverage.out
 coverage.html
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# We use out-of-source beads tracking, so any local .beads is ephemeral
+.beads
+
+# We use lots of agents, but don't commit to any
+.bob
+.claude
+.opencode
