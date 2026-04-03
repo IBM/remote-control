@@ -15,3 +15,6 @@ coverage.html
 .bob
 .claude
 .opencode
+
+# Don't commit any scratch from tmp
+tmp
