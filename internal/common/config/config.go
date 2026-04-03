@@ -54,9 +54,12 @@ type Config struct {
 	Log LoggingConfig `json:"log"`
 }
 
-func defaults() *Config {
+func Defaults() *Config {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".remote-control")
+	if h := os.Getenv("REMOTE_CONTROL_HOME"); h != "" {
+		configDir = expandTilde(h)
+	}
 	return &Config{
 		ConfigDir:              configDir,
 		ServerURL:              "https://localhost:8443",
@@ -201,17 +204,13 @@ func configureLogging(cfg *Config) error {
 }
 
 // Load loads the configuration applying the full priority chain:
-//  1. Defaults
-//  2. REMOTE_CONTROL_HOME (sets ConfigDir)
-//  3. config.json from ConfigDir
-//  4. Individual env overrides
-//  5. CLI flag overrides
+//  1. Defaults (REMOTE_CONTROL_HOME sets ConfigDir)
+//  2. config.json from ConfigDir
+//  3. Individual env overrides
+//  4. CLI flag overrides
 func Load(cliOverrides map[string]string) (*Config, error) {
-	cfg := defaults()
+	cfg := Defaults()
 
-	if h := os.Getenv("REMOTE_CONTROL_HOME"); h != "" {
-		cfg.ConfigDir = expandTilde(h)
-	}
 	if err := readConfigFile(cfg); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}

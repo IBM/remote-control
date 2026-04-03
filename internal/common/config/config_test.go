@@ -320,7 +320,7 @@ func TestStrToBool(t *testing.T) {
 // ============================================================================
 
 func TestDefaultWebSocketConfig(t *testing.T) {
-	cfg := defaults()
+	cfg := Defaults()
 
 	if !cfg.EnableWebSocket {
 		t.Error("expected EnableWebSocket=true by default")
