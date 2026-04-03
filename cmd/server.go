@@ -2,13 +2,11 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -36,18 +34,12 @@ var serverCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().StringVar(&serverAddr, "addr", ":8443", "Address to listen on")
-	serverCmd.Flags().BoolVar(&serverListSessions, "list-sessions", false, "Print active sessions table and exit")
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(cliOverrides())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
-	}
-
-	// --list-sessions: query a running server and exit.
-	if serverListSessions {
-		return listRemoteSessions(cfg)
 	}
 
 	// Warn on expiring certs.
@@ -90,29 +82,4 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
-}
-
-// listRemoteSessions queries the running server for its session list and prints it.
-func listRemoteSessions(cfg *config.Config) error {
-	resp, err := http.Get(cfg.ServerURL + "/sessions") //nolint:noctx
-	if err != nil {
-		return fmt.Errorf("query server: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var sessions []struct {
-		ID      string   `json:"id"`
-		Command []string `json:"command"`
-		Status  string   `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
-		return err
-	}
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tCOMMAND\tSTATUS")
-	for _, s := range sessions {
-		fmt.Fprintf(tw, "%s\t%v\t%s\n", s.ID, s.Command, s.Status)
-	}
-	return tw.Flush()
 }
