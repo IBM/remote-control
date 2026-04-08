@@ -134,10 +134,10 @@ func (p *WebSocketPipe) IsConnected() bool {
 // Send queues raw bytes on the send channel.
 func (p *WebSocketPipe) Send(data []byte) error {
 	select {
-	case p.send <- data:
-		return nil
 	case <-p.done:
 		return fmt.Errorf("connection closed")
+	case p.send <- data:
+		return nil
 	default:
 		return fmt.Errorf("send buffer full")
 	}
