@@ -12,7 +12,12 @@ import (
 
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/server"
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // testServer starts a real HTTP server on a free port and returns its URL.
 // The server is shut down when the test ends.

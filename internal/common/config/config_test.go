@@ -5,7 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // cleanEnv clears env vars that would pollute config loading in tests.
 func cleanEnv(t *testing.T, dir string) {

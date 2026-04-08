@@ -22,6 +22,10 @@ import (
 	testmain "github.com/gabe-l-hart/remote-control/test"
 )
 
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
+
 func testServer(t *testing.T) string {
 	t.Helper()
 	cfg := &config.Config{RequireApproval: false, MaxOutputBuffer: 1024}
@@ -289,8 +293,4 @@ func TestHostSessionCompleted(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 after completion, got %d", resp.StatusCode)
 	}
-}
-
-func TestMain(m *testing.M) {
-	testmain.TestMain(m)
 }

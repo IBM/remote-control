@@ -8,7 +8,12 @@ import (
 
 	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // ============================================================================
 // Session Creation Tests
