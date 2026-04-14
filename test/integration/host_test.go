@@ -272,12 +272,24 @@ func TestHostSessionCompleted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	workdir, err := os.MkdirTemp("", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workdir)
+
 	runErr := make(chan error, 1)
+	sentinelPath := filepath.Join(workdir, "done")
 	go func() {
-		runErr <- h.Run(ctx, []string{"sh", "-c", "exit 42"})
+		// Wait for sentinel file before exiting to ensure session is detected
+		cmd := fmt.Sprintf(`while ! [ -f %s ]; do sleep 0.05; done; exit 42`, sentinelPath)
+		runErr <- h.Run(ctx, []string{"sh", "-c", cmd})
 	}()
 
 	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
+
+	// Signal the command to exit now that session is detected
+	os.Create(sentinelPath)
 
 	select {
 	case err := <-runErr:
