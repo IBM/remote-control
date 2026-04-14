@@ -1,5 +1,9 @@
+# Compiled binaries
 remote-control
 remote-control-android
+*.test
+
+# Coverage outputs
 coverage.out
 coverage.html
 
