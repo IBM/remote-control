@@ -1,8 +1,9 @@
-FROM registry.access.redhat.com/ubi10/ubi:latest AS build
-RUN dnf install -y golang
+FROM --platform=$BUILDPLATFORM golang:1.24 AS build
 WORKDIR /src
 COPY . .
-RUN make
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build .
 
 FROM registry.access.redhat.com/ubi10/ubi-micro:latest AS release
 COPY --from=build /src/remote-control /usr/local/bin/remote-control
