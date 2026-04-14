@@ -5,6 +5,7 @@
 ## Testing
 
 * To run the full test suite, use `make test` which runs `go test` with race detection enabled
+* Non-test code should never contain code paths that are only to support tests
 * All test packages should include the following snippets in one `*_test.go` file to use the shared main entrypoint:
 
 ```go
