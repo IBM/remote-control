@@ -82,7 +82,7 @@ func (wh *WebSocketHost) Connect(ctx context.Context) error {
 	wh.pipe = pipe
 	pipe.OnMessage(wh.handleMessage)
 	pipe.OnDisconnect(func() {
-		wsHostCh.Log(alog.INFO, "[remote-control] Host WebSocket disconnected")
+		wsHostCh.Log(alog.DEBUG, "[remote-control] Host WebSocket disconnected")
 	})
 	pipe.Start(ctx)
 

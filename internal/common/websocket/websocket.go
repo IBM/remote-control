@@ -250,7 +250,7 @@ func (p *WebSocketPipe) startReconnectLoop() {
 		return
 	}
 
-	ch.Log(alog.INFO, "Starting reconnection loop")
+	ch.Log(alog.DEBUG, "Starting reconnection loop")
 
 	// Ensure we have a valid reconnect interval
 	interval := p.reconnectInterval
@@ -276,9 +276,9 @@ func (p *WebSocketPipe) startReconnectLoop() {
 				return
 			case <-ticker.C:
 				if err := p.attemptReconnect(); err != nil {
-					ch.Log(alog.DEBUG, "Reconnection attempt failed: %v", err)
+					ch.Log(alog.DEBUG2, "Reconnection attempt failed: %v", err)
 				} else {
-					ch.Log(alog.INFO, "Reconnection successful")
+					ch.Log(alog.DEBUG, "Reconnection successful")
 					p.flushQueue()
 					return
 				}
@@ -447,7 +447,7 @@ func (p *WebSocketPipe) handleDisconnect() {
 	onDisconnect := p.onDisconnect
 	p.mu.Unlock()
 
-	ch.Log(alog.INFO, "WebSocket disconnected")
+	ch.Log(alog.DEBUG, "WebSocket disconnected")
 
 	p.startReconnectLoop()
 
@@ -500,7 +500,7 @@ func (p *WebSocketPipe) flushQueue() {
 		return
 	}
 
-	ch.Log(alog.INFO, "Flushing %d queued messages", queueLen)
+	ch.Log(alog.DEBUG2, "Flushing %d queued messages", queueLen)
 
 	p.queueMu.Lock()
 	defer p.queueMu.Unlock()
@@ -515,5 +515,5 @@ func (p *WebSocketPipe) flushQueue() {
 	}
 
 	p.messageQueue = p.messageQueue[:0]
-	ch.Log(alog.INFO, "Queue flush complete")
+	ch.Log(alog.DEBUG2, "Queue flush complete")
 }
