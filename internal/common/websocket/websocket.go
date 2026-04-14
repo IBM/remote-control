@@ -442,7 +442,9 @@ func (p *WebSocketPipe) handleDisconnect() {
 
 	ch.Log(alog.DEBUG, "WebSocket disconnected")
 
-	p.startReconnectLoop()
+	if p.reconnectURL != "" {
+		p.startReconnectLoop()
+	}
 
 	if onDisconnect != nil {
 		onDisconnect()
