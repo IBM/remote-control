@@ -5,7 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // generateCA is a test helper that creates a CA cert+key in dir.
 func generateCA(t *testing.T, dir string) (certFile, keyFile string) {

@@ -5,16 +5,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // TestAndroidArgvDuplication tests the workaround for Android Termux
 // duplicating the executable path in argv[1]
 func TestAndroidArgvDuplication(t *testing.T) {
 	tests := []struct {
-		name           string
-		initialArgs    []string
-		expectedArgs   []string
-		description    string
+		name         string
+		initialArgs  []string
+		expectedArgs []string
+		description  string
 	}{
 		{
 			name: "absolute path with duplicate in argv[1]",
@@ -157,7 +163,7 @@ func TestAndroidArgvDuplicationWithRelativePath(t *testing.T) {
 	tmpDir := t.TempDir()
 	execName := "test-binary"
 	execPath := filepath.Join(tmpDir, execName)
-	
+
 	// Create a dummy file
 	f, err := os.Create(execPath)
 	if err != nil {
@@ -184,8 +190,8 @@ func TestAndroidArgvDuplicationWithRelativePath(t *testing.T) {
 
 	// Test with relative path in argv[0] and absolute path in argv[1]
 	os.Args = []string{
-		"./" + execName,  // relative path
-		absPath,          // absolute path (duplicate)
+		"./" + execName, // relative path
+		absPath,         // absolute path (duplicate)
 		"server",
 	}
 

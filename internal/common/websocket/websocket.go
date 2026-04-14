@@ -17,6 +17,13 @@ import (
 
 var ch = alog.UseChannel("WEBSOCKET")
 
+// WebSocketConfig holds configuration for WebSocket reconnection.
+type WebSocketConfig struct {
+	ReconnectInterval time.Duration
+	ReconnectTimeout  time.Duration
+	MaxQueueLength    int
+}
+
 // DeriveWebSocketURL converts http(s):// URLs to ws(s):// URLs.
 // It strips any existing path and query parameters since the WebSocket path
 // is constructed separately.
@@ -63,6 +70,18 @@ type WebSocketPipe struct {
 
 	onMessage    MessageHandler
 	onDisconnect DisconnectHandler
+
+	reconnectURL      string
+	tlsConfig         *tls.Config
+	messageQueue      [][]byte
+	queueMu           sync.Mutex
+	maxQueueLength    int
+	reconnectInterval time.Duration
+	reconnectTimeout  time.Duration
+	reconnectCancel   context.CancelFunc
+	reconnecting      atomic.Bool
+	startCtx          context.Context
+	connectionGen     atomic.Uint32 // Tracks connection generation to detect stale pumps
 }
 
 // NewPipe creates a WebSocketPipe from an existing connection with its own
@@ -86,8 +105,22 @@ func NewPipeWithChannels(conn *websocket.Conn, send chan []byte, done chan struc
 	}
 }
 
+// queueMessage adds a message to the queue, dropping oldest if at capacity.
+func (p *WebSocketPipe) queueMessage(data []byte) {
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+
+	if len(p.messageQueue) >= p.maxQueueLength {
+		ch.Log(alog.DEBUG, "Message queue full, dropping oldest message")
+		p.messageQueue = p.messageQueue[1:]
+	}
+
+	p.messageQueue = append(p.messageQueue, data)
+	ch.Log(alog.DEBUG3, "Queued message, queue length: %d", len(p.messageQueue))
+}
+
 // Dial creates a new outbound WebSocket connection and returns a started pipe.
-func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config) (*WebSocketPipe, error) {
+func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config, config *WebSocketConfig) (*WebSocketPipe, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
@@ -102,6 +135,29 @@ func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config) (*WebSocketP
 
 	p := NewPipe(conn)
 	p.connected.Store(true)
+
+	p.reconnectURL = wsURL
+	p.tlsConfig = tlsConfig
+	p.messageQueue = make([][]byte, 0, config.MaxQueueLength)
+
+	if config.ReconnectInterval > 0 {
+		p.reconnectInterval = config.ReconnectInterval
+	} else {
+		p.reconnectInterval = 5 * time.Second
+	}
+
+	if config.ReconnectTimeout > 0 {
+		p.reconnectTimeout = config.ReconnectTimeout
+	} else {
+		p.reconnectTimeout = 10 * time.Second
+	}
+
+	if config.MaxQueueLength > 0 {
+		p.maxQueueLength = config.MaxQueueLength
+	} else {
+		p.maxQueueLength = 100
+	}
+
 	return p, nil
 }
 
@@ -122,8 +178,16 @@ func (p *WebSocketPipe) OnDisconnect(h DisconnectHandler) {
 // Start launches the read and write pump goroutines.
 func (p *WebSocketPipe) Start(ctx context.Context) {
 	p.connected.Store(true)
-	go p.readPump(ctx)
-	go p.writePump(ctx)
+	p.startCtx = ctx
+
+	// Initialize connection generation to 1 for initial connection
+	initialGen := p.connectionGen.Load()
+	if initialGen == 0 {
+		initialGen = p.connectionGen.Add(1)
+	}
+
+	go p.readPump(ctx, initialGen)
+	go p.writePump(ctx, initialGen)
 }
 
 // IsConnected returns whether the pipe is currently connected.
@@ -134,12 +198,14 @@ func (p *WebSocketPipe) IsConnected() bool {
 // Send queues raw bytes on the send channel.
 func (p *WebSocketPipe) Send(data []byte) error {
 	select {
+	case <-p.done:
+		p.queueMessage(data)
+		return fmt.Errorf("connection closed, message queued")
 	case p.send <- data:
 		return nil
-	case <-p.done:
-		return fmt.Errorf("connection closed")
 	default:
-		return fmt.Errorf("send buffer full")
+		p.queueMessage(data)
+		return fmt.Errorf("send buffer full, message queued")
 	}
 }
 
@@ -170,10 +236,58 @@ func (p *WebSocketPipe) DoneChan() chan struct{} {
 	return p.done
 }
 
+// startReconnectLoop initiates the reconnection process (idempotent).
+func (p *WebSocketPipe) startReconnectLoop() {
+	if !p.reconnecting.CompareAndSwap(false, true) {
+		ch.Log(alog.DEBUG, "Reconnection loop already running")
+		return
+	}
+
+	ch.Log(alog.DEBUG, "Starting reconnection loop")
+
+	// Ensure we have a valid reconnect interval
+	interval := p.reconnectInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
+	ctx, cancel := context.WithCancel(p.startCtx)
+	p.reconnectCancel = cancel
+
+	go func() {
+		defer func() {
+			p.reconnecting.Store(false)
+			ch.Log(alog.DEBUG, "Reconnection loop exited")
+		}()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := p.attemptReconnect(); err != nil {
+					ch.Log(alog.DEBUG2, "Reconnection attempt failed: %v", err)
+				} else {
+					ch.Log(alog.DEBUG, "Reconnection successful")
+					p.flushQueue()
+					return
+				}
+			}
+		}
+	}()
+}
+
 // Close gracefully shuts down the pipe.
 func (p *WebSocketPipe) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.reconnectCancel != nil {
+		p.reconnectCancel()
+	}
 
 	select {
 	case <-p.done:
@@ -196,12 +310,19 @@ func (p *WebSocketPipe) Close() error {
 /* -- Pumps ----------------------------------------------------------------- */
 
 // readPump reads messages from the WebSocket.
-func (p *WebSocketPipe) readPump(ctx context.Context) {
+// gen is the connection generation that this pump must match to remain active.
+func (p *WebSocketPipe) readPump(ctx context.Context, gen uint32) {
 	defer p.handleDisconnect()
 
 	p.mu.RLock()
 	conn := p.conn
 	p.mu.RUnlock()
+
+	// Verify we're still operating on the correct connection generation
+	if p.connectionGen.Load() != gen {
+		ch.Log(alog.DEBUG, "readPump exiting due to generation change")
+		return
+	}
 
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -227,6 +348,11 @@ func (p *WebSocketPipe) readPump(ctx context.Context) {
 			return
 		}
 
+		// Check generation again before processing
+		if p.connectionGen.Load() != gen {
+			return
+		}
+
 		var msg types.WSMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			ch.Log(alog.DEBUG, "invalid JSON in WebSocket message: %v", err)
@@ -243,7 +369,8 @@ func (p *WebSocketPipe) readPump(ctx context.Context) {
 }
 
 // writePump writes messages to the WebSocket.
-func (p *WebSocketPipe) writePump(ctx context.Context) {
+// gen is the connection generation that this pump must match to remain active.
+func (p *WebSocketPipe) writePump(ctx context.Context, gen uint32) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -257,6 +384,12 @@ func (p *WebSocketPipe) writePump(ctx context.Context) {
 			p.mu.RLock()
 			conn := p.conn
 			p.mu.RUnlock()
+
+			// Verify we're still operating on the correct connection generation
+			if p.connectionGen.Load() != gen {
+				ch.Log(alog.DEBUG, "writePump exiting due to generation change")
+				return
+			}
 
 			if conn == nil {
 				return
@@ -278,6 +411,11 @@ func (p *WebSocketPipe) writePump(ctx context.Context) {
 			p.mu.RLock()
 			conn := p.conn
 			p.mu.RUnlock()
+
+			// Check generation before sending ping
+			if p.connectionGen.Load() != gen {
+				return
+			}
 
 			if conn == nil {
 				return
@@ -302,7 +440,75 @@ func (p *WebSocketPipe) handleDisconnect() {
 	onDisconnect := p.onDisconnect
 	p.mu.Unlock()
 
+	ch.Log(alog.DEBUG, "WebSocket disconnected")
+
+	if p.reconnectURL != "" {
+		p.startReconnectLoop()
+	}
+
 	if onDisconnect != nil {
 		onDisconnect()
 	}
+}
+
+// attemptReconnect tries to re-establish the WebSocket connection.
+func (p *WebSocketPipe) attemptReconnect() error {
+	ctx, cancel := context.WithTimeout(p.startCtx, p.reconnectTimeout)
+	defer cancel()
+
+	ch.Log(alog.DEBUG, "Attempting to reconnect to %s", p.reconnectURL)
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: p.reconnectTimeout,
+	}
+	if p.tlsConfig != nil {
+		dialer.TLSClientConfig = p.tlsConfig
+	}
+
+	conn, _, err := dialer.DialContext(ctx, p.reconnectURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial failed: %w", err)
+	}
+
+	// Increment generation counter for the new connection
+	newGen := p.connectionGen.Add(1)
+
+	p.mu.Lock()
+	p.conn = conn
+	p.connected.Store(true)
+	p.mu.Unlock()
+
+	// Start pumps with the new connection, passing the current generation
+	go p.readPump(p.startCtx, newGen)
+	go p.writePump(p.startCtx, newGen)
+
+	return nil
+}
+
+// flushQueue sends all queued messages to the send channel.
+func (p *WebSocketPipe) flushQueue() {
+	p.queueMu.Lock()
+	queueLen := len(p.messageQueue)
+	p.queueMu.Unlock()
+
+	if queueLen == 0 {
+		return
+	}
+
+	ch.Log(alog.DEBUG2, "Flushing %d queued messages", queueLen)
+
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+
+	for _, msg := range p.messageQueue {
+		select {
+		case <-p.startCtx.Done():
+			ch.Log(alog.DEBUG, "Context canceled during queue flush")
+			return
+		case p.send <- msg:
+		}
+	}
+
+	p.messageQueue = p.messageQueue[:0]
+	ch.Log(alog.DEBUG2, "Queue flush complete")
 }

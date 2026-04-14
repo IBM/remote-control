@@ -1,5 +1,9 @@
+# Compiled binaries
 remote-control
 remote-control-android
+*.test
+
+# Coverage outputs
 coverage.out
 coverage.html
 
@@ -15,3 +19,6 @@ coverage.html
 .bob
 .claude
 .opencode
+
+# Don't commit any scratch from tmp
+tmp

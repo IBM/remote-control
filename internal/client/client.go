@@ -62,6 +62,14 @@ func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
 	}, tlsCfg
 }
 
+func buildWebSocketConfig(cfg *config.Config) *ws.WebSocketConfig {
+	return &ws.WebSocketConfig{
+		ReconnectInterval: time.Duration(cfg.WebSocketReconnectIntervalSeconds) * time.Second,
+		ReconnectTimeout:  time.Duration(cfg.WebSocketReconnectTimeoutSeconds) * time.Second,
+		MaxQueueLength:    cfg.WebSocketMaxQueueLength,
+	}
+}
+
 func filterInput(input []byte) ([]byte, bool) {
 	data := make([]byte, 0, len(input))
 	i := 0
@@ -240,8 +248,11 @@ func (c *Client) initWebSocket(ctx context.Context, sessionID string) {
 	wsURL := ws.DeriveWebSocketURL(c.cfg.ServerURL)
 	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
 
-	// Create WebSocket host connection
-	c.wsClient = NewWebSocketConnection(wsURL, c.tlsConfig, c.clientID, sessionID)
+	// Build WebSocket config
+	wsConfig := buildWebSocketConfig(c.cfg)
+
+	// Create WebSocket connection
+	c.wsClient = NewWebSocketConnection(wsURL, c.tlsConfig, c.clientID, sessionID, wsConfig)
 
 	// Render output when received on websocket
 	c.wsClient.OnOutput(func(chunk types.OutputChunk) {

@@ -8,7 +8,12 @@ import (
 	"time"
 
 	types "github.com/gabe-l-hart/remote-control/internal/common"
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // mockWriter captures writes for inspection in tests.
 type mockWriter struct {

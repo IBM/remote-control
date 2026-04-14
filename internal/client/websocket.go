@@ -22,6 +22,7 @@ type WebSocketConnection struct {
 	tlsConfig *tls.Config
 	clientID  string
 	sessionID string
+	wsConfig  *ws.WebSocketConfig
 
 	handler OutputHandler
 	mu      sync.RWMutex
@@ -30,12 +31,13 @@ type WebSocketConnection struct {
 type OutputHandler func(chunk types.OutputChunk)
 
 // NewWebSocketConnection creates a new WebSocket connection
-func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, sessionID string) *WebSocketConnection {
+func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, sessionID string, wsConfig *ws.WebSocketConfig) *WebSocketConnection {
 	return &WebSocketConnection{
 		url:       url,
 		tlsConfig: tlsConfig,
 		clientID:  clientID,
 		sessionID: sessionID,
+		wsConfig:  wsConfig,
 	}
 }
 
@@ -55,7 +57,7 @@ func (c *WebSocketConnection) Connect(ctx context.Context) error {
 	wsURL := c.url + "/ws/" + c.sessionID
 	wsCh.Log(alog.DEBUG, "Dialing WebSocket at [%s]", wsURL)
 
-	pipe, err := ws.Dial(ctx, wsURL, c.tlsConfig)
+	pipe, err := ws.Dial(ctx, wsURL, c.tlsConfig, c.wsConfig)
 	if err != nil {
 		return err
 	}

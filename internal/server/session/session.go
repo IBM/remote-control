@@ -264,12 +264,17 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 // GetClient gets the client if available
 func (s *Session) GetClient(clientID string) *SessionClient {
 	if clientID == types.HostClientID {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 		return s.hostConn
 	}
-	if client, ok := s.clients[clientID]; ok {
-		return client
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	client, ok := s.clients[clientID]
+	if !ok {
+		return nil
 	}
-	return nil
+	return client
 }
 
 // ApproveClient approves a client with the given permission level.

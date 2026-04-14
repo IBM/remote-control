@@ -188,8 +188,15 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinEntry) (
 // If conn is provided, this is a WebSocket request and clientID may identify the host.
 func (s *Server) handleRegisterClient(id string, clientID string, conn *websocket.Conn) (int, interface{}) {
 	sess, err := s.store.Get(id)
+
+	// If the session isn't found, auto-create it for state recovery
 	if err != nil {
-		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
+		handlerCh.Log(alog.DEBUG, "Recreating session %s for client %s", id, clientID)
+		sess, err = s.store.Create(&id, conn, s.cfg)
+		if nil != err {
+			handlerCh.Log(alog.WARNING, "Failed to recreate client session")
+			return http.StatusInternalServerError, err
+		}
 	}
 
 	// If no clientID provided (HTTP POST), generate a new client

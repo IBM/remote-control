@@ -51,6 +51,11 @@ type Config struct {
 	WSReconnectDelay       int    `json:"ws_reconnect_delay"`
 	WSMaxReconnectDelay    int    `json:"ws_max_reconnect_delay"`
 
+	// WebSocket recovery configuration
+	WebSocketReconnectIntervalSeconds int `json:"websocket_reconnect_interval_seconds"`
+	WebSocketReconnectTimeoutSeconds  int `json:"websocket_reconnect_timeout_seconds"`
+	WebSocketMaxQueueLength           int `json:"websocket_max_queue_length"`
+
 	Log LoggingConfig `json:"log"`
 }
 
@@ -61,19 +66,22 @@ func Defaults() *Config {
 		configDir = expandTilde(h)
 	}
 	return &Config{
-		ConfigDir:              configDir,
-		ServerURL:              "https://localhost:8443",
-		RequireApproval:        false,
-		DefaultPermission:      types.PermissionReadWrite,
-		PollIntervalMs:         100,
-		ClientTimeoutSeconds:   60,
-		MaxOutputBuffer:        1024 * 1024, // 1MB default w/ 1 byte chunks
-		EnableWebSocket:        true,
-		WSFailureThreshold:     3,
-		WSFailureWindow:        60,
-		WSUpgradeCheckInterval: 10,
-		WSReconnectDelay:       1,
-		WSMaxReconnectDelay:    30,
+		ConfigDir:                         configDir,
+		ServerURL:                         "https://localhost:8443",
+		RequireApproval:                   false,
+		DefaultPermission:                 types.PermissionReadWrite,
+		PollIntervalMs:                    100,
+		ClientTimeoutSeconds:              60,
+		MaxOutputBuffer:                   1024 * 1024,
+		EnableWebSocket:                   true,
+		WSFailureThreshold:                3,
+		WSFailureWindow:                   60,
+		WSUpgradeCheckInterval:            10,
+		WSReconnectDelay:                  1,
+		WSMaxReconnectDelay:               30,
+		WebSocketReconnectIntervalSeconds: 5,
+		WebSocketReconnectTimeoutSeconds:  10,
+		WebSocketMaxQueueLength:           100,
 		Log: LoggingConfig{
 			DefaultLevel: "info",
 			Filters:      "",

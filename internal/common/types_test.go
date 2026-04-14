@@ -4,7 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	testmain "github.com/gabe-l-hart/remote-control/test"
 )
+
+func TestMain(m *testing.M) {
+	testmain.TestMain(m)
+}
 
 // ============================================================================
 // Stream Enum Tests
