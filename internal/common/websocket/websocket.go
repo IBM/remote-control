@@ -236,13 +236,6 @@ func (p *WebSocketPipe) DoneChan() chan struct{} {
 	return p.done
 }
 
-// GetQueueStatus returns the current queue length and capacity.
-func (p *WebSocketPipe) GetQueueStatus() (length int, capacity int) {
-	p.queueMu.Lock()
-	defer p.queueMu.Unlock()
-	return len(p.messageQueue), p.maxQueueLength
-}
-
 // startReconnectLoop initiates the reconnection process (idempotent).
 func (p *WebSocketPipe) startReconnectLoop() {
 	if !p.reconnecting.CompareAndSwap(false, true) {

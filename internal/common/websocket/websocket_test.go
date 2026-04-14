@@ -29,7 +29,7 @@ func TestQueueMessage(t *testing.T) {
 	p.queueMessage(msg1)
 	p.queueMessage(msg2)
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 2 {
 		t.Errorf("expected queue length 2, got %d", length)
 	}
@@ -54,7 +54,7 @@ func TestQueueMessageOverflow(t *testing.T) {
 		p.queueMessage(msg)
 	}
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != maxLen {
 		t.Errorf("expected queue length %d, got %d", maxLen, length)
 	}
@@ -62,7 +62,7 @@ func TestQueueMessageOverflow(t *testing.T) {
 	msgNew := []byte("new message")
 	p.queueMessage(msgNew)
 
-	length, _ = p.GetQueueStatus()
+	length = len(p.messageQueue)
 	if length != maxLen {
 		t.Errorf("expected queue length %d after overflow, got %d", maxLen, length)
 	}
@@ -72,34 +72,6 @@ func TestQueueMessageOverflow(t *testing.T) {
 	}
 	if string(p.messageQueue[len(p.messageQueue)-1]) != "new message" {
 		t.Errorf("expected newest to be 'new message', got %q", string(p.messageQueue[len(p.messageQueue)-1]))
-	}
-}
-
-func TestGetQueueStatus(t *testing.T) {
-	maxLen := 20
-	p := &WebSocketPipe{
-		messageQueue:   make([][]byte, 0, maxLen),
-		maxQueueLength: maxLen,
-	}
-
-	length, capacity := p.GetQueueStatus()
-	if length != 0 {
-		t.Errorf("expected initial length 0, got %d", length)
-	}
-	if capacity != maxLen {
-		t.Errorf("expected capacity %d, got %d", maxLen, capacity)
-	}
-
-	for i := 0; i < 5; i++ {
-		p.queueMessage([]byte("message"))
-	}
-
-	length, capacity = p.GetQueueStatus()
-	if length != 5 {
-		t.Errorf("expected length 5, got %d", length)
-	}
-	if capacity != maxLen {
-		t.Errorf("expected capacity %d, got %d", maxLen, capacity)
 	}
 }
 
@@ -118,7 +90,7 @@ func TestFlushQueueEmpty(t *testing.T) {
 
 	p.flushQueue()
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 0 {
 		t.Errorf("expected queue length 0 after flush of empty queue, got %d", length)
 	}
@@ -139,7 +111,7 @@ func TestFlushQueueSuccess(t *testing.T) {
 
 	p.flushQueue()
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 0 {
 		t.Errorf("expected queue length 0 after flush, got %d", length)
 	}
@@ -182,7 +154,7 @@ func TestFlushQueueWithContextCancellation(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length > 5 {
 		t.Errorf("expected some messages to be sent or flushed, queue length %d", length)
 	}
@@ -325,7 +297,7 @@ func TestSendQueuesOnDisconnect(t *testing.T) {
 		t.Error("expected error when sending on closed connection")
 	}
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 1 {
 		t.Errorf("expected queue length 1 after failed send, got %d", length)
 	}
@@ -354,7 +326,7 @@ func TestSendQueuesOnFullBuffer(t *testing.T) {
 		t.Errorf("expected 'send buffer full, message queued' error, got %q", err.Error())
 	}
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 1 {
 		t.Errorf("expected queue length 1 after failed send, got %d", length)
 	}
@@ -376,7 +348,7 @@ func TestSendSucceedsWhenConnected(t *testing.T) {
 		t.Errorf("unexpected error when sending: %v", err)
 	}
 
-	length, _ := p.GetQueueStatus()
+	length := len(p.messageQueue)
 	if length != 0 {
 		t.Errorf("expected queue length 0 on successful send, got %d", length)
 	}
