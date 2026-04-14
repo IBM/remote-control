@@ -81,6 +81,7 @@ type WebSocketPipe struct {
 	reconnectCancel   context.CancelFunc
 	reconnecting      atomic.Bool
 	startCtx          context.Context
+	connectionGen     atomic.Uint32 // Tracks connection generation to detect stale pumps
 }
 
 // NewPipe creates a WebSocketPipe from an existing connection with its own
@@ -178,8 +179,15 @@ func (p *WebSocketPipe) OnDisconnect(h DisconnectHandler) {
 func (p *WebSocketPipe) Start(ctx context.Context) {
 	p.connected.Store(true)
 	p.startCtx = ctx
-	go p.readPump(ctx)
-	go p.writePump(ctx)
+
+	// Initialize connection generation to 1 for initial connection
+	initialGen := p.connectionGen.Load()
+	if initialGen == 0 {
+		initialGen = p.connectionGen.Add(1)
+	}
+
+	go p.readPump(ctx, initialGen)
+	go p.writePump(ctx, initialGen)
 }
 
 // IsConnected returns whether the pipe is currently connected.
@@ -244,6 +252,12 @@ func (p *WebSocketPipe) startReconnectLoop() {
 
 	ch.Log(alog.INFO, "Starting reconnection loop")
 
+	// Ensure we have a valid reconnect interval
+	interval := p.reconnectInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
 	ctx, cancel := context.WithCancel(p.startCtx)
 	p.reconnectCancel = cancel
 
@@ -253,7 +267,7 @@ func (p *WebSocketPipe) startReconnectLoop() {
 			ch.Log(alog.DEBUG, "Reconnection loop exited")
 		}()
 
-		ticker := time.NewTicker(p.reconnectInterval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
@@ -303,12 +317,19 @@ func (p *WebSocketPipe) Close() error {
 /* -- Pumps ----------------------------------------------------------------- */
 
 // readPump reads messages from the WebSocket.
-func (p *WebSocketPipe) readPump(ctx context.Context) {
+// gen is the connection generation that this pump must match to remain active.
+func (p *WebSocketPipe) readPump(ctx context.Context, gen uint32) {
 	defer p.handleDisconnect()
 
 	p.mu.RLock()
 	conn := p.conn
 	p.mu.RUnlock()
+
+	// Verify we're still operating on the correct connection generation
+	if p.connectionGen.Load() != gen {
+		ch.Log(alog.DEBUG, "readPump exiting due to generation change")
+		return
+	}
 
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
@@ -334,6 +355,11 @@ func (p *WebSocketPipe) readPump(ctx context.Context) {
 			return
 		}
 
+		// Check generation again before processing
+		if p.connectionGen.Load() != gen {
+			return
+		}
+
 		var msg types.WSMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			ch.Log(alog.DEBUG, "invalid JSON in WebSocket message: %v", err)
@@ -350,7 +376,8 @@ func (p *WebSocketPipe) readPump(ctx context.Context) {
 }
 
 // writePump writes messages to the WebSocket.
-func (p *WebSocketPipe) writePump(ctx context.Context) {
+// gen is the connection generation that this pump must match to remain active.
+func (p *WebSocketPipe) writePump(ctx context.Context, gen uint32) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -364,6 +391,12 @@ func (p *WebSocketPipe) writePump(ctx context.Context) {
 			p.mu.RLock()
 			conn := p.conn
 			p.mu.RUnlock()
+
+			// Verify we're still operating on the correct connection generation
+			if p.connectionGen.Load() != gen {
+				ch.Log(alog.DEBUG, "writePump exiting due to generation change")
+				return
+			}
 
 			if conn == nil {
 				return
@@ -385,6 +418,11 @@ func (p *WebSocketPipe) writePump(ctx context.Context) {
 			p.mu.RLock()
 			conn := p.conn
 			p.mu.RUnlock()
+
+			// Check generation before sending ping
+			if p.connectionGen.Load() != gen {
+				return
+			}
 
 			if conn == nil {
 				return
@@ -437,13 +475,17 @@ func (p *WebSocketPipe) attemptReconnect() error {
 		return fmt.Errorf("dial failed: %w", err)
 	}
 
+	// Increment generation counter for the new connection
+	newGen := p.connectionGen.Add(1)
+
 	p.mu.Lock()
 	p.conn = conn
 	p.connected.Store(true)
 	p.mu.Unlock()
 
-	go p.readPump(p.startCtx)
-	go p.writePump(p.startCtx)
+	// Start pumps with the new connection, passing the current generation
+	go p.readPump(p.startCtx, newGen)
+	go p.writePump(p.startCtx, newGen)
 
 	return nil
 }
