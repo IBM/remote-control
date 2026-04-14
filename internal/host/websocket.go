@@ -22,6 +22,7 @@ type WebSocketHost struct {
 	tlsConfig *tls.Config
 	sessionID string
 	clientID  string
+	wsConfig  *ws.WebSocketConfig
 
 	onStdinHandler         func(types.StdinEntry)
 	onPendingClientHandler func(string)
@@ -30,12 +31,13 @@ type WebSocketHost struct {
 }
 
 // NewWebSocketHost creates a new WebSocketHost instance
-func NewWebSocketHost(url string, tlsConfig *tls.Config, sessionID, clientID string) *WebSocketHost {
+func NewWebSocketHost(url string, tlsConfig *tls.Config, sessionID, clientID string, wsConfig *ws.WebSocketConfig) *WebSocketHost {
 	return &WebSocketHost{
 		url:       url,
 		tlsConfig: tlsConfig,
 		sessionID: sessionID,
 		clientID:  clientID,
+		wsConfig:  wsConfig,
 	}
 }
 
@@ -72,7 +74,7 @@ func (wh *WebSocketHost) Connect(ctx context.Context) error {
 		wsURL += "?client_id=" + wh.clientID
 	}
 
-	pipe, err := ws.Dial(ctx, wsURL, wh.tlsConfig)
+	pipe, err := ws.Dial(ctx, wsURL, wh.tlsConfig, wh.wsConfig)
 	if err != nil {
 		return err
 	}

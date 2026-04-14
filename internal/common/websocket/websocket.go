@@ -17,6 +17,13 @@ import (
 
 var ch = alog.UseChannel("WEBSOCKET")
 
+// WebSocketConfig holds configuration for WebSocket reconnection.
+type WebSocketConfig struct {
+	ReconnectInterval time.Duration
+	ReconnectTimeout  time.Duration
+	MaxQueueLength    int
+}
+
 // DeriveWebSocketURL converts http(s):// URLs to ws(s):// URLs.
 // It strips any existing path and query parameters since the WebSocket path
 // is constructed separately.
@@ -63,6 +70,17 @@ type WebSocketPipe struct {
 
 	onMessage    MessageHandler
 	onDisconnect DisconnectHandler
+
+	reconnectURL      string
+	tlsConfig         *tls.Config
+	messageQueue      [][]byte
+	queueMu           sync.Mutex
+	maxQueueLength    int
+	reconnectInterval time.Duration
+	reconnectTimeout  time.Duration
+	reconnectCancel   context.CancelFunc
+	reconnecting      atomic.Bool
+	startCtx          context.Context
 }
 
 // NewPipe creates a WebSocketPipe from an existing connection with its own
@@ -86,8 +104,22 @@ func NewPipeWithChannels(conn *websocket.Conn, send chan []byte, done chan struc
 	}
 }
 
+// queueMessage adds a message to the queue, dropping oldest if at capacity.
+func (p *WebSocketPipe) queueMessage(data []byte) {
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+
+	if len(p.messageQueue) >= p.maxQueueLength {
+		ch.Log(alog.DEBUG, "Message queue full, dropping oldest message")
+		p.messageQueue = p.messageQueue[1:]
+	}
+
+	p.messageQueue = append(p.messageQueue, data)
+	ch.Log(alog.DEBUG3, "Queued message, queue length: %d", len(p.messageQueue))
+}
+
 // Dial creates a new outbound WebSocket connection and returns a started pipe.
-func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config) (*WebSocketPipe, error) {
+func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config, config *WebSocketConfig) (*WebSocketPipe, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
@@ -102,6 +134,29 @@ func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config) (*WebSocketP
 
 	p := NewPipe(conn)
 	p.connected.Store(true)
+
+	p.reconnectURL = wsURL
+	p.tlsConfig = tlsConfig
+	p.messageQueue = make([][]byte, 0, config.MaxQueueLength)
+
+	if config.ReconnectInterval > 0 {
+		p.reconnectInterval = config.ReconnectInterval
+	} else {
+		p.reconnectInterval = 5 * time.Second
+	}
+
+	if config.ReconnectTimeout > 0 {
+		p.reconnectTimeout = config.ReconnectTimeout
+	} else {
+		p.reconnectTimeout = 10 * time.Second
+	}
+
+	if config.MaxQueueLength > 0 {
+		p.maxQueueLength = config.MaxQueueLength
+	} else {
+		p.maxQueueLength = 100
+	}
+
 	return p, nil
 }
 
@@ -122,6 +177,7 @@ func (p *WebSocketPipe) OnDisconnect(h DisconnectHandler) {
 // Start launches the read and write pump goroutines.
 func (p *WebSocketPipe) Start(ctx context.Context) {
 	p.connected.Store(true)
+	p.startCtx = ctx
 	go p.readPump(ctx)
 	go p.writePump(ctx)
 }
@@ -135,11 +191,13 @@ func (p *WebSocketPipe) IsConnected() bool {
 func (p *WebSocketPipe) Send(data []byte) error {
 	select {
 	case <-p.done:
-		return fmt.Errorf("connection closed")
+		p.queueMessage(data)
+		return fmt.Errorf("connection closed, message queued")
 	case p.send <- data:
 		return nil
 	default:
-		return fmt.Errorf("send buffer full")
+		p.queueMessage(data)
+		return fmt.Errorf("send buffer full, message queued")
 	}
 }
 
@@ -170,10 +228,59 @@ func (p *WebSocketPipe) DoneChan() chan struct{} {
 	return p.done
 }
 
+// GetQueueStatus returns the current queue length and capacity.
+func (p *WebSocketPipe) GetQueueStatus() (length int, capacity int) {
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+	return len(p.messageQueue), p.maxQueueLength
+}
+
+// startReconnectLoop initiates the reconnection process (idempotent).
+func (p *WebSocketPipe) startReconnectLoop() {
+	if !p.reconnecting.CompareAndSwap(false, true) {
+		ch.Log(alog.DEBUG, "Reconnection loop already running")
+		return
+	}
+
+	ch.Log(alog.INFO, "Starting reconnection loop")
+
+	ctx, cancel := context.WithCancel(p.startCtx)
+	p.reconnectCancel = cancel
+
+	go func() {
+		defer func() {
+			p.reconnecting.Store(false)
+			ch.Log(alog.DEBUG, "Reconnection loop exited")
+		}()
+
+		ticker := time.NewTicker(p.reconnectInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := p.attemptReconnect(); err != nil {
+					ch.Log(alog.DEBUG, "Reconnection attempt failed: %v", err)
+				} else {
+					ch.Log(alog.INFO, "Reconnection successful")
+					p.flushQueue()
+					return
+				}
+			}
+		}
+	}()
+}
+
 // Close gracefully shuts down the pipe.
 func (p *WebSocketPipe) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.reconnectCancel != nil {
+		p.reconnectCancel()
+	}
 
 	select {
 	case <-p.done:
@@ -302,7 +409,69 @@ func (p *WebSocketPipe) handleDisconnect() {
 	onDisconnect := p.onDisconnect
 	p.mu.Unlock()
 
+	ch.Log(alog.INFO, "WebSocket disconnected")
+
+	p.startReconnectLoop()
+
 	if onDisconnect != nil {
 		onDisconnect()
 	}
+}
+
+// attemptReconnect tries to re-establish the WebSocket connection.
+func (p *WebSocketPipe) attemptReconnect() error {
+	ctx, cancel := context.WithTimeout(p.startCtx, p.reconnectTimeout)
+	defer cancel()
+
+	ch.Log(alog.DEBUG, "Attempting to reconnect to %s", p.reconnectURL)
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: p.reconnectTimeout,
+	}
+	if p.tlsConfig != nil {
+		dialer.TLSClientConfig = p.tlsConfig
+	}
+
+	conn, _, err := dialer.DialContext(ctx, p.reconnectURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial failed: %w", err)
+	}
+
+	p.mu.Lock()
+	p.conn = conn
+	p.connected.Store(true)
+	p.mu.Unlock()
+
+	go p.readPump(p.startCtx)
+	go p.writePump(p.startCtx)
+
+	return nil
+}
+
+// flushQueue sends all queued messages to the send channel.
+func (p *WebSocketPipe) flushQueue() {
+	p.queueMu.Lock()
+	queueLen := len(p.messageQueue)
+	p.queueMu.Unlock()
+
+	if queueLen == 0 {
+		return
+	}
+
+	ch.Log(alog.INFO, "Flushing %d queued messages", queueLen)
+
+	p.queueMu.Lock()
+	defer p.queueMu.Unlock()
+
+	for _, msg := range p.messageQueue {
+		select {
+		case <-p.startCtx.Done():
+			ch.Log(alog.DEBUG, "Context canceled during queue flush")
+			return
+		case p.send <- msg:
+		}
+	}
+
+	p.messageQueue = p.messageQueue[:0]
+	ch.Log(alog.INFO, "Queue flush complete")
 }

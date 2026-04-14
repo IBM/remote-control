@@ -94,6 +94,15 @@ func buildTLSConfig(cfg *config.Config) *tls.Config {
 	return tlsCfg
 }
 
+// buildWebSocketConfig creates WebSocket connection config from main config.
+func buildWebSocketConfig(cfg *config.Config) *ws.WebSocketConfig {
+	return &ws.WebSocketConfig{
+		ReconnectInterval: time.Duration(cfg.WebSocketReconnectIntervalSeconds) * time.Second,
+		ReconnectTimeout:  time.Duration(cfg.WebSocketReconnectTimeoutSeconds) * time.Second,
+		MaxQueueLength:    cfg.WebSocketMaxQueueLength,
+	}
+}
+
 // Run starts the subprocess specified by command, creates a server session,
 // proxies all I/O, and waits for the process to exit.
 //
@@ -380,8 +389,11 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	wsURL := ws.DeriveWebSocketURL(h.cfg.ServerURL)
 	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
 
+	// Build WebSocket config
+	wsConfig := buildWebSocketConfig(h.cfg)
+
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, types.HostClientID)
+	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, types.HostClientID, wsConfig)
 
 	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
 	h.wsHost.OnPendingClient(func(clientID string) {
