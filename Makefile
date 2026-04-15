@@ -20,7 +20,7 @@ docker:
 
 .PHONY: docker.release
 docker.release:
-	docker buildx build --platform linux/arm64,linux/amd64 . -t ${REGISTRY}/remote-control:$(shell ./version.sh) --push
+	docker buildx build --platform linux/arm64,linux/amd64 . -t ${REGISTRY}/remote-control:$(shell ./scripts/version.sh) --push
 
 # Run all tests with race detection.
 .PHONY: test
