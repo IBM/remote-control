@@ -1,4 +1,5 @@
 REGISTRY?=us.icr.io/ghart
+IMAGE_NAME?=${REGISTRY}/remote-control:$(shell ./scripts/version.sh)
 
 # Build the binary
 .PHONY: build
@@ -20,7 +21,7 @@ docker:
 
 .PHONY: docker.release
 docker.release:
-	docker buildx build --platform linux/arm64,linux/amd64 . -t ${REGISTRY}/remote-control:$(shell ./scripts/version.sh) --push
+	docker buildx build --platform linux/arm64,linux/amd64 . -t ${IMAGE_NAME} --push
 
 # Run all tests with race detection.
 .PHONY: test
