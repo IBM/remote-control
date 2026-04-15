@@ -5,8 +5,14 @@ Secure remote control for terminal-based applications with mutual TLS authentica
 ## Quick Start
 
 ```bash
-# Install
-curl -fsSL https://raw.githubusercontent.com/gabe-l-hart/remote-control/main/install.sh | sh
+# Install (latest prebuilt binary, auto-fallback to source)
+curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
+
+# Install specific version
+VERSION=v0.0.1 curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
+
+# Build from source
+INSTALL_FROM_SOURCE=1 curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
 
 # Initialize mTLS
 remote-control init
@@ -20,6 +26,22 @@ remote-control opencode
 # Connect a client
 remote-control connect
 ```
+
+### Installation Options
+
+The installer supports the following environment variables:
+
+- **`VERSION`**: Specify a release version (default: `latest`)
+  - Example: `VERSION=v0.0.1 curl -fsSL ... | sh`
+- **`INSTALL_FROM_SOURCE`**: Set to `1` to build from source instead of using prebuilt binaries
+  - Example: `INSTALL_FROM_SOURCE=1 curl -fsSL ... | sh`
+- **`REPO_URL`**: Custom repository URL (default: `https://github.com/IBM/remote-control.git`)
+- **`NO_CLEANUP`**: Set to `1` to keep temporary files after installation
+
+**Note**: The installer automatically falls back to building from source if:
+- No prebuilt binary exists for your platform
+- GitHub API rate limits are exceeded
+- Network issues prevent binary download
 
 ## Why Remote Control
 
