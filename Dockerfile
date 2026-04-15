@@ -11,3 +11,4 @@ ENV HOME=/home/app
 RUN mkdir -p /home/app && chmod ugo+rwx /home/app
 USER 1423:7986
 ENTRYPOINT ["/usr/local/bin/remote-control"]
+CMD ["server"]
