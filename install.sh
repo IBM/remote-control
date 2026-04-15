@@ -1,12 +1,18 @@
 #!/usr/bin/env sh
 # Remote Control Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/gabe-l-hart/remote-control/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
 
 # Configuration
-REPO_URL="${REPO_URL:-https://github.com/gabe-l-hart/remote-control.git}"
+REPO_URL="${REPO_URL:-https://github.com/IBM/remote-control.git}"
 MIN_GO_VERSION="1.24.0"
 GO_VERSION="1.24.0"
 NO_CLEANUP=${NO_CLEANUP:-"0"}
+
+# Installation mode configuration
+INSTALL_FROM_SOURCE="${INSTALL_FROM_SOURCE:-0}"
+VERSION="${VERSION:-latest}"
+GITHUB_API_URL="https://api.github.com/repos/IBM/remote-control"
+GITHUB_RELEASE_URL="https://github.com/IBM/remote-control/releases/download"
 
 # Color codes for output
 if [ -t 1 ]; then
@@ -103,6 +109,58 @@ version_gte() {
     fi
 }
 
+# Fetch latest release information from GitHub API
+# Returns: release tag (e.g., "v0.0.1") or empty string on failure
+fetch_latest_release() {
+    local api_url="${GITHUB_API_URL}/releases/latest"
+    local response=""
+
+    log_info "Fetching latest release information..."
+
+    if check_command curl; then
+        response=$(curl -fsSL -H "Accept: application/vnd.github.v3+json" "$api_url" 2>/dev/null || echo "")
+    elif check_command wget; then
+        response=$(wget -qO- --header="Accept: application/vnd.github.v3+json" "$api_url" 2>/dev/null || echo "")
+    fi
+
+    if [ -z "$response" ]; then
+        log_warning "Failed to fetch release information from GitHub API"
+        return 1
+    fi
+
+    # Extract tag_name from JSON response (simple grep/sed approach)
+    local tag
+    tag=$(echo "$response" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
+    if [ -z "$tag" ]; then
+        log_warning "Failed to parse release tag from API response"
+        return 1
+    fi
+
+    echo "$tag"
+    return 0
+}
+
+# Determine which version to install
+# Returns: version tag or empty string
+get_release_version() {
+    if [ "$VERSION" = "latest" ]; then
+        fetch_latest_release
+    else
+        # Validate version format (should start with 'v')
+        case "$VERSION" in
+            v*)
+                echo "$VERSION"
+                return 0
+                ;;
+            *)
+                log_error "Invalid version format: $VERSION (should start with 'v', e.g., v0.0.1)"
+                return 1
+                ;;
+        esac
+    fi
+}
+
 # Detect operating system and architecture
 detect_platform() {
     local os=""
@@ -139,6 +197,48 @@ detect_platform() {
     esac
 
     echo "${os}-${arch}"
+}
+
+# Download prebuilt binary from GitHub release
+# Args: $1 = version tag, $2 = platform (e.g., "darwin-arm64")
+# Returns: path to downloaded binary or empty string on failure
+download_prebuilt_binary() {
+    local version="$1"
+    local platform="$2"
+    local binary_name="remote-control-${platform}"
+    local download_url="${GITHUB_RELEASE_URL}/${version}/${binary_name}"
+    local output_path="${TEMP_DIR}/${binary_name}"
+
+    log_info "Downloading prebuilt binary for ${platform}..."
+    log_info "URL: ${download_url}"
+
+    if check_command curl; then
+        if ! curl -fsSL "$download_url" -o "$output_path" 2>/dev/null; then
+            log_warning "Failed to download prebuilt binary from ${download_url}"
+            return 1
+        fi
+    elif check_command wget; then
+        if ! wget -q "$download_url" -O "$output_path" 2>/dev/null; then
+            log_warning "Failed to download prebuilt binary from ${download_url}"
+            return 1
+        fi
+    else
+        log_error "Neither curl nor wget is available"
+        return 1
+    fi
+
+    # Verify the file was downloaded and is not empty
+    if [ ! -f "$output_path" ] || [ ! -s "$output_path" ]; then
+        log_warning "Downloaded file is missing or empty"
+        return 1
+    fi
+
+    # Make binary executable
+    chmod +x "$output_path" 2>/dev/null
+
+    log_success "Prebuilt binary downloaded successfully"
+    echo "$output_path"
+    return 0
 }
 
 # Check dependencies
@@ -242,6 +342,44 @@ install_go() {
     INSTALL_GO=true
 }
 
+# Attempt to install from prebuilt binary
+# Args: $1 = platform
+# Returns: 0 on success, 1 on failure (triggers fallback)
+try_binary_install() {
+    local platform="$1"
+    local version=""
+    local binary_path=""
+
+    # Get version to install
+    if ! version=$(get_release_version); then
+        log_warning "Could not determine release version"
+        return 1
+    fi
+
+    log_info "Target version: ${version}"
+
+    # Download prebuilt binary
+    if ! binary_path=$(download_prebuilt_binary "$version" "$platform"); then
+        log_warning "Prebuilt binary not available for ${platform}"
+        return 1
+    fi
+
+    # Install binary
+    local install_path
+    if ! install_path=$(install_binary "$binary_path"); then
+        log_error "Failed to install binary"
+        return 1
+    fi
+
+    # Verify installation
+    if ! verify_installation "$install_path"; then
+        log_error "Installation verification failed"
+        return 1
+    fi
+
+    return 0
+}
+
 # Clone repository
 clone_repository() {
     local repo_dir="${TEMP_DIR}/remote-control"
@@ -318,6 +456,49 @@ install_binary() {
     echo "$install_location"
 }
 
+# Build and install from source
+# Args: $1 = platform
+# Returns: 0 on success, 1 on failure
+build_from_source() {
+    local platform="$1"
+
+    log_info "Building from source..."
+
+    # Check Go version
+    if ! check_go_version; then
+        install_go "$platform"
+    fi
+
+    # Clone repository
+    local repo_dir
+    if ! repo_dir=$(clone_repository); then
+        log_error "Failed to clone repository"
+        return 1
+    fi
+
+    # Build binary
+    local binary_path
+    if ! binary_path=$(build_binary "$repo_dir"); then
+        log_error "Failed to build binary"
+        return 1
+    fi
+
+    # Install binary
+    local install_path
+    if ! install_path=$(install_binary "$binary_path"); then
+        log_error "Failed to install binary"
+        return 1
+    fi
+
+    # Verify installation
+    if ! verify_installation "$install_path"; then
+        log_error "Installation verification failed"
+        return 1
+    fi
+
+    return 0
+}
+
 # Verify installation
 verify_installation() {
     local install_path="$1"
@@ -376,31 +557,22 @@ main() {
     fi
     log_success "Temporary directory: $TEMP_DIR"
 
-    # Check Go version
-    log_info "Checking Go installation..."
-    if ! check_go_version; then
-        install_go "$platform"
-    fi
-
-    # Clone repository
-    local repo_dir
-    repo_dir=$(clone_repository)
-    log_info "Repo Dir: $repo_dir"
-
-    # Build binary
-    local binary_path
-    binary_path=$(build_binary "$repo_dir")
-    log_info "Binary Path: $binary_path"
-
-    # Install binary
-    local install_path
-    install_path=$(install_binary "$binary_path")
-    log_info "Install Path: $install_path"
-
-    # Verify installation
-    if ! verify_installation "$install_path"; then
-        log_error "Installation verification failed"
-        exit 1
+    # Determine installation method
+    if [ "$INSTALL_FROM_SOURCE" = "1" ]; then
+        log_info "INSTALL_FROM_SOURCE=1 detected, building from source..."
+        if ! build_from_source "$platform"; then
+            log_error "Source build failed"
+            exit 1
+        fi
+    else
+        log_info "Attempting to install prebuilt binary..."
+        if ! try_binary_install "$platform"; then
+            log_warning "Prebuilt binary installation failed, falling back to source build..."
+            if ! build_from_source "$platform"; then
+                log_error "Source build failed"
+                exit 1
+            fi
+        fi
     fi
 
     echo ""
