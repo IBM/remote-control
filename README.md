@@ -6,7 +6,7 @@ Secure remote control for terminal-based applications with mutual TLS authentica
 
 ```bash
 # Install
-curl -fsSL https://raw.githubusercontent.com/gabe-l-hart/remote-control/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
 
 # Initialize mTLS
 remote-control init
