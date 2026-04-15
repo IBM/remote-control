@@ -22,3 +22,6 @@ coverage.html
 
 # Don't commit any scratch from tmp
 tmp
+
+# Local environment configuration
+.env
