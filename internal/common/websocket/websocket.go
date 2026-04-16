@@ -82,15 +82,17 @@ type WebSocketPipe struct {
 	reconnecting      atomic.Bool
 	startCtx          context.Context
 	connectionGen     atomic.Uint32 // Tracks connection generation to detect stale pumps
+	closeSignal       chan struct{} // Signal to writePump to send close frame
 }
 
 // NewPipe creates a WebSocketPipe from an existing connection with its own
 // send and done channels.
 func NewPipe(conn *websocket.Conn) *WebSocketPipe {
 	return &WebSocketPipe{
-		conn: conn,
-		send: make(chan []byte, 256),
-		done: make(chan struct{}),
+		conn:        conn,
+		send:        make(chan []byte, 256),
+		done:        make(chan struct{}),
+		closeSignal: make(chan struct{}),
 	}
 }
 
@@ -99,9 +101,10 @@ func NewPipe(conn *websocket.Conn) *WebSocketPipe {
 // (e.g. a server session client).
 func NewPipeWithChannels(conn *websocket.Conn, send chan []byte, done chan struct{}) *WebSocketPipe {
 	return &WebSocketPipe{
-		conn: conn,
-		send: send,
-		done: done,
+		conn:        conn,
+		send:        send,
+		done:        done,
+		closeSignal: make(chan struct{}),
 	}
 }
 
@@ -110,7 +113,8 @@ func (p *WebSocketPipe) queueMessage(data []byte) {
 	p.queueMu.Lock()
 	defer p.queueMu.Unlock()
 
-	if len(p.messageQueue) >= p.maxQueueLength {
+	// Only queue if maxQueueLength is set and queue is not empty
+	if p.maxQueueLength > 0 && len(p.messageQueue) >= p.maxQueueLength {
 		ch.Log(alog.DEBUG, "Message queue full, dropping oldest message")
 		p.messageQueue = p.messageQueue[1:]
 	}
@@ -201,11 +205,14 @@ func (p *WebSocketPipe) Send(data []byte) error {
 	case <-p.done:
 		p.queueMessage(data)
 		return fmt.Errorf("connection closed, message queued")
-	case p.send <- data:
-		return nil
 	default:
-		p.queueMessage(data)
-		return fmt.Errorf("send buffer full, message queued")
+		select {
+		case p.send <- data:
+			return nil
+		default:
+			p.queueMessage(data)
+			return fmt.Errorf("send buffer full, message queued")
+		}
 	}
 }
 
@@ -296,12 +303,17 @@ func (p *WebSocketPipe) Close() error {
 		close(p.done)
 	}
 
-	if p.conn != nil {
-		p.conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		p.conn.Close()
-		p.conn = nil
+	// Signal writePump to send close frame by closing closeSignal channel
+	// Only close if not already closed
+	select {
+	case <-p.closeSignal:
+		// Already closed
+	default:
+		close(p.closeSignal)
 	}
+
+	// Don't write directly to conn - let writePump handle it
+	// The connection will be closed when writePump exits
 
 	p.connected.Store(false)
 	return nil
@@ -379,6 +391,17 @@ func (p *WebSocketPipe) writePump(ctx context.Context, gen uint32) {
 		case <-ctx.Done():
 			return
 		case <-p.done:
+			return
+		case <-p.closeSignal:
+			// Close signal received, send close frame
+			p.mu.RLock()
+			conn := p.conn
+			p.mu.RUnlock()
+			if conn != nil {
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				conn.Close()
+			}
 			return
 		case message, ok := <-p.send:
 			p.mu.RLock()
