@@ -21,8 +21,10 @@ import (
 var ch = alog.UseChannel("SERVER")
 
 var (
-	serverAddr         string
-	serverListSessions bool
+	serverAddr              string
+	authMode                string
+	authProxyIdentityHeader string
+	authProxyRequireTLS     bool
 )
 
 var serverCmd = &cobra.Command{
@@ -35,15 +37,29 @@ var serverCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().StringVar(&serverAddr, "addr", ":8443", "Address to listen on")
-	serverCmd.Flags().String("auth-mode", "", "Authentication mode: mtls, proxy, none")
-	serverCmd.Flags().String("auth-proxy-identity-header", "", "Identity header name for proxy auth")
-	serverCmd.Flags().Bool("auth-proxy-require-tls", false, "Require TLS for proxy auth")
+	serverCmd.Flags().StringVar(&authMode, "auth-mode", "", "Authentication mode: mtls, proxy, none")
+	serverCmd.Flags().StringVar(&authProxyIdentityHeader, "auth-proxy-identity-header", "", "Identity header name for proxy auth")
+	serverCmd.Flags().BoolVar(&authProxyRequireTLS, "auth-proxy-require-tls", false, "Require TLS for proxy auth")
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(cliOverrides())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Configure auth mode
+	if authMode != "" {
+		if authMode != "mtls" && authMode != "proxy" && authMode != "none" {
+			return fmt.Errorf("invalid auth mode: %s", authMode)
+		}
+		cfg.Auth.Mode = types.AuthMode(authMode)
+	}
+	if authProxyIdentityHeader != "" {
+		cfg.Auth.Proxy.IdentityHeader = authProxyIdentityHeader
+	}
+	if authProxyRequireTLS {
+		cfg.Auth.Proxy.RequireTLS = authProxyRequireTLS
 	}
 
 	// Log authentication mode
