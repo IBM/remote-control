@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 	testmain "github.com/gabe-l-hart/remote-control/test"
 )
 
@@ -215,7 +216,7 @@ func TestBuildClientTLSConfig(t *testing.T) {
 	caCert, caKey := generateCA(t, dir)
 	clientCert, clientKey := generateSigned(t, dir, "client", caCert, caKey)
 
-	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, caCert)
+	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, caCert, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("BuildClientTLSConfig error: %v", err)
 	}
@@ -239,7 +240,7 @@ func TestBuildClientTLSConfigBadCert(t *testing.T) {
 	os.WriteFile(badKey, []byte("not a key"), 0600)   //nolint:errcheck
 	os.WriteFile(caCert, []byte("not a CA"), 0600)    //nolint:errcheck
 
-	_, err := BuildClientTLSConfig(badCert, badKey, caCert)
+	_, err := BuildClientTLSConfig(badCert, badKey, caCert, types.AuthModeMTLS)
 	if err == nil {
 		t.Fatal("expected error for invalid cert")
 	}
@@ -253,7 +254,7 @@ func TestBuildClientTLSConfigBadCA(t *testing.T) {
 	badCA := filepath.Join(dir, "bad-ca.crt")
 	os.WriteFile(badCA, []byte("not a CA cert"), 0600) //nolint:errcheck
 
-	_, err := BuildClientTLSConfig(clientCert, clientKey, badCA)
+	_, err := BuildClientTLSConfig(clientCert, clientKey, badCA, types.AuthModeMTLS)
 	if err == nil {
 		t.Fatal("expected error for invalid CA cert")
 	}
@@ -266,7 +267,7 @@ func TestBuildServerTLSConfig(t *testing.T) {
 	caCert, caKey := generateCA(t, dir)
 	serverCert, serverKey := generateSigned(t, dir, "server", caCert, caKey)
 
-	tlsCfg, err := BuildServerTLSConfig(serverCert, serverKey, caCert)
+	tlsCfg, err := BuildServerTLSConfig(serverCert, serverKey, caCert, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("BuildServerTLSConfig error: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestBuildServerTLSConfigBadCert(t *testing.T) {
 	os.WriteFile(badKey, []byte("not a key"), 0600)   //nolint:errcheck
 	os.WriteFile(caCert, []byte("not a CA"), 0600)    //nolint:errcheck
 
-	_, err := BuildServerTLSConfig(badCert, badKey, caCert)
+	_, err := BuildServerTLSConfig(badCert, badKey, caCert, types.AuthModeMTLS)
 	if err == nil {
 		t.Fatal("expected error for invalid server cert")
 	}
