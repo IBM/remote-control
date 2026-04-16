@@ -44,13 +44,11 @@ func NewClient(cfg *config.Config) *Client {
 /* -- Private Helpers ------------------------------------------------------- */
 
 func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
-	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
-		return &http.Client{Timeout: 30 * time.Second}, nil
-	}
 	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
 		cfg.ClientTLS.CertFile,
 		cfg.ClientTLS.KeyFile,
 		cfg.ClientTLS.TrustedCAFile,
+		cfg.Auth.Mode,
 	)
 	if err != nil {
 		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
