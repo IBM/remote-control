@@ -2,9 +2,7 @@ package host
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,9 +16,9 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
+	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
@@ -29,11 +27,10 @@ var ch = alog.UseChannel("HOST")
 // Host manages the subprocess lifecycle and I/O proxying.
 type Host struct {
 	cfg    *config.Config
-	client *types.APIClient
+	client *apiclient.APIClient
 
 	// WebSocket connection for real-time communication
-	tlsConfig *tls.Config
-	wsHost    *WebSocketHost
+	wsHost *WebSocketHost
 
 	// Channel-based approval routing
 	approvalMu     sync.Mutex
@@ -51,30 +48,10 @@ type Host struct {
 
 // NewHost creates a Host from the given config.
 func NewHost(cfg *config.Config) *Host {
-	httpClient, tlsCfg := buildHTTPClient(cfg)
 	return &Host{
-		cfg:       cfg,
-		client:    types.NewAPIClient(cfg.ServerURL, httpClient),
-		tlsConfig: tlsCfg,
+		cfg:    cfg,
+		client: apiclient.NewAPIClient(cfg),
 	}
-}
-
-// buildHTTPClient creates an http.Client with TLS configured if certs are available.
-func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
-	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
-		cfg.ClientTLS.CertFile,
-		cfg.ClientTLS.KeyFile,
-		cfg.ClientTLS.TrustedCAFile,
-		cfg.Auth.Mode,
-	)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
-		return &http.Client{Timeout: 30 * time.Second}, nil
-	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}, tlsCfg
 }
 
 // buildWebSocketConfig creates WebSocket connection config from main config.
@@ -373,7 +350,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	wsConfig := buildWebSocketConfig(h.cfg)
 
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, h.tlsConfig, sessionID, types.HostClientID, wsConfig)
+	h.wsHost = NewWebSocketHost(wsURL, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
 
 	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
 	h.wsHost.OnPendingClient(func(clientID string) {

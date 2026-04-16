@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
 	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
@@ -38,7 +39,7 @@ func (sw *syncWriter) Close() error {
 // forwards each chunk to the server.
 // stream is "stdout" or "stderr".
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
-func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *types.APIClient, sessionID string, stream types.Stream, wsHost *WebSocketHost) {
+func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, client *apiclient.APIClient, sessionID string, stream types.Stream, wsHost *WebSocketHost) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := r.Read(buf)
@@ -90,7 +91,7 @@ func (h *Host) proxyOutput(ctx context.Context, r io.Reader, dst io.Writer, clie
 // "stdout" stream output. io.EOF and "input/output error" are treated as
 // normal PTY HUP (subprocess exited).
 // If wsHost is available, sends output via WebSocket, otherwise uses HTTP.
-func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.APIClient, sessionID string, wsHost *WebSocketHost) {
+func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *apiclient.APIClient, sessionID string, wsHost *WebSocketHost) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := ptmx.Read(buf)
@@ -149,7 +150,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *types.
 // When an approval prompt is active (approvalActive == true), the first byte of
 // the line is routed to approvalRespCh instead of the subprocess — no mutex is
 // held during I/O, eliminating the deadlock present in the prior design.
-func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *types.APIClient, sessionID string) {
+func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *apiclient.APIClient, sessionID string) {
 	type scanResult struct{ line []byte }
 	lineCh := make(chan scanResult, 1)
 
@@ -195,14 +196,6 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 				}
 				continue
 			}
-
-			// lineWithNewline := append(res.line, '\n')
-
-			// Submit directly to stdin
-			// TODO: THis is very broken!!!!!!!!!!!!!!!!!!!!!!
-			// if writeErr != nil {
-			// 	ch.Log(alog.DEBUG, "[remote-control] process host stdin entry error: %v", writeErr)
-			// }
 		}
 	}
 }
@@ -210,7 +203,7 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 // proxyLocalStdinRaw reads individual bytes from os.Stdin (raw terminal mode)
 //
 // Each keystroke is submitted individually (threshold: 1 byte) for responsiveness.
-func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *types.APIClient, sessionID string, wsHost *WebSocketHost) {
+func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *apiclient.APIClient, sessionID string, wsHost *WebSocketHost) {
 	byteCh := make(chan byte, 16)
 
 	go func() {
@@ -283,7 +276,7 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 // proxyServerStdin handles server stdin entries.
 // When WebSocket is connected, stdin comes via WebSocket callbacks.
 // When WebSocket is disconnected, falls back to polling.
-func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, client *types.APIClient, sessionID string) {
+func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, client *apiclient.APIClient, sessionID string) {
 	// If WebSocket is connected, stdin entries are handled via callbacks
 	// If WebSocket is disconnected, we can poll for queued stdin entries
 	if h.wsHost == nil || !h.wsHost.IsConnected() {
@@ -298,7 +291,7 @@ func (h *Host) proxyServerStdin(ctx context.Context, stdinPipe *syncWriter, clie
 }
 
 // proxyServerStdinPTY is the PTY variant of proxyServerStdin.
-func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *types.APIClient, sessionID string) {
+func (h *Host) proxyServerStdinPTY(ctx context.Context, ptmx *os.File, ptmxMu *sync.Mutex, client *apiclient.APIClient, sessionID string) {
 	// If WebSocket is connected, stdin entries are handled via callbacks
 	// If WebSocket is disconnected, falls back to polling
 	if h.wsHost == nil || !h.wsHost.IsConnected() {
