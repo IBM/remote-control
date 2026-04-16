@@ -34,7 +34,12 @@ func NewServer(addr string, cfg *config.Config) *Server {
 	}
 	s.registerRoutes()
 
-	handler := loggingMiddleware(recoveryMiddleware(mux))
+	// Build middleware chain with auth
+	handler := loggingMiddleware(
+		authMiddleware(cfg)(
+			recoveryMiddleware(mux),
+		),
+	)
 	s.httpServer = &http.Server{
 		Addr:              addr,
 		Handler:           handler,

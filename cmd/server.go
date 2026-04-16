@@ -12,6 +12,7 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/spf13/cobra"
 
+	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 	"github.com/gabe-l-hart/remote-control/internal/server"
@@ -34,6 +35,9 @@ var serverCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().StringVar(&serverAddr, "addr", ":8443", "Address to listen on")
+	serverCmd.Flags().String("auth-mode", "", "Authentication mode: mtls, proxy, none")
+	serverCmd.Flags().String("auth-proxy-identity-header", "", "Identity header name for proxy auth")
+	serverCmd.Flags().Bool("auth-proxy-require-tls", false, "Require TLS for proxy auth")
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
@@ -42,10 +46,15 @@ func runServer(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Warn on expiring certs.
-	tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile)
-	tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
-	tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
+	// Log authentication mode
+	ch.Log(alog.INFO, "[remote-control] Authentication mode: %s", cfg.Auth.Mode)
+
+	// Warn on expiring certs (only in mTLS mode)
+	if cfg.Auth.Mode == types.AuthModeMTLS {
+		tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile)
+		tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
+		tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
+	}
 
 	srv := server.NewServer(serverAddr, cfg)
 	ch.Log(alog.INFO, "[remote-control] server listening on %s", serverAddr)
@@ -69,6 +78,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 			cfg.ServerTLS.CertFile,
 			cfg.ServerTLS.KeyFile,
 			cfg.ServerTLS.TrustedCAFile,
+			cfg.Auth.Mode,
 		)
 		if err != nil {
 			return fmt.Errorf("build TLS config: %w", err)
