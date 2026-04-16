@@ -113,7 +113,8 @@ func (p *WebSocketPipe) queueMessage(data []byte) {
 	p.queueMu.Lock()
 	defer p.queueMu.Unlock()
 
-	if len(p.messageQueue) >= p.maxQueueLength {
+	// Only queue if maxQueueLength is set and queue is not empty
+	if p.maxQueueLength > 0 && len(p.messageQueue) >= p.maxQueueLength {
 		ch.Log(alog.DEBUG, "Message queue full, dropping oldest message")
 		p.messageQueue = p.messageQueue[1:]
 	}
