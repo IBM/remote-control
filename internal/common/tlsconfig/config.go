@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 // BuildServerTLSConfig constructs the TLS configuration for the remote-control server.

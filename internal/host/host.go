@@ -18,8 +18,8 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )

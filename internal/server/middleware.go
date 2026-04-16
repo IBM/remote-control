@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 var middlewareCh = alog.UseChannel("ENDPOINT")

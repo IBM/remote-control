@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 func TestRecoveryMiddlewareCatchesPanic(t *testing.T) {

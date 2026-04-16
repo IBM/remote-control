@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	types "github.com/gabe-l-hart/remote-control/internal/common"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 var authCh = alog.UseChannel("AUTH")

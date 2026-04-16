@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 func TestFullSessionLifecycle(t *testing.T) {

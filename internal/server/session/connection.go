@@ -7,7 +7,7 @@ import (
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gorilla/websocket"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
