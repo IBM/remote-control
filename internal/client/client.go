@@ -50,12 +50,13 @@ func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
 		cfg.ClientTLS.TrustedCAFile,
 		cfg.Auth.Mode,
 	)
+	timeout := time.Duration(cfg.ClientTimeoutSeconds) * time.Second
 	if err != nil {
 		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
-		return &http.Client{Timeout: 30 * time.Second}, nil
+		return &http.Client{Timeout: timeout}, nil
 	}
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   timeout,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}, tlsCfg
 }
