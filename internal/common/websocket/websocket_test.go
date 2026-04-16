@@ -2,6 +2,8 @@ package ws
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +247,7 @@ func TestCloseCancelsReconnectionLoop(t *testing.T) {
 	p := &WebSocketPipe{
 		send:              sendCh,
 		done:              doneCh,
+		closeSignal:       make(chan struct{}),
 		reconnectURL:      "ws://nonexistent:8080/ws/test",
 		tlsConfig:         nil,
 		reconnectInterval: 50 * time.Millisecond,
@@ -495,5 +498,157 @@ func TestDialConfigCustom(t *testing.T) {
 	}
 	if p.maxQueueLength != 200 {
 		t.Errorf("expected max queue length 200, got %d", p.maxQueueLength)
+	}
+}
+
+// ============================================================================
+// Race Condition Tests - Concurrent WebSocket Write
+// ============================================================================
+
+func TestWebSocketConcurrentClose(t *testing.T) {
+	sendCh := make(chan []byte, 100)
+	doneCh := make(chan struct{})
+
+	p := &WebSocketPipe{
+		send:           sendCh,
+		done:           doneCh,
+		closeSignal:    make(chan struct{}),
+		messageQueue:   make([][]byte, 0, 10),
+		maxQueueLength: 10,
+		connected:      atomic.Bool{},
+	}
+	p.connected.Store(true)
+
+	// Start continuous message sending
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			select {
+			case <-doneCh:
+				return
+			default:
+				p.Send([]byte(fmt.Sprintf("message%d", i)))
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+
+	// Call Close while messages are being sent
+	time.Sleep(10 * time.Millisecond)
+	err := p.Close()
+	if err != nil {
+		t.Errorf("Close() returned error: %v", err)
+	}
+
+	// Wait for goroutines to complete
+	wg.Wait()
+
+	// Verify no panic occurred
+	if p.connected.Load() {
+		t.Error("expected connected to be false after Close")
+	}
+}
+
+func TestWebSocketConcurrentCloseMultiple(t *testing.T) {
+	sendCh := make(chan []byte, 100)
+	doneCh := make(chan struct{})
+
+	p := &WebSocketPipe{
+		send:           sendCh,
+		done:           doneCh,
+		closeSignal:    make(chan struct{}),
+		messageQueue:   make([][]byte, 0, 10),
+		maxQueueLength: 10,
+		connected:      atomic.Bool{},
+		reconnectURL:   "ws://test/ws",
+		startCtx:       context.Background(),
+	}
+	p.connected.Store(true)
+
+	// Start multiple concurrent Close calls
+	var wg sync.WaitGroup
+	numCalls := 10
+	wg.Add(numCalls)
+	for i := 0; i < numCalls; i++ {
+		go func() {
+			defer wg.Done()
+			p.Close()
+		}()
+	}
+
+	// Wait for all Close calls to complete
+	wg.Wait()
+
+	// Verify no panic and connection is closed
+	if p.connected.Load() {
+		t.Error("expected connected to be false after multiple Close calls")
+	}
+}
+
+func TestWebSocketSendAfterClose(t *testing.T) {
+	sendCh := make(chan []byte, 100)
+	doneCh := make(chan struct{})
+
+	p := &WebSocketPipe{
+		send:           sendCh,
+		done:           doneCh,
+		closeSignal:    make(chan struct{}),
+		messageQueue:   make([][]byte, 0, 10),
+		maxQueueLength: 10,
+		connected:      atomic.Bool{},
+	}
+	p.connected.Store(true)
+
+	// Close the connection
+	p.Close()
+
+	// Wait a bit for close to propagate
+	time.Sleep(10 * time.Millisecond)
+
+	// Sending after close should queue the message without panic
+	err := p.Send([]byte("test message"))
+	if err == nil {
+		t.Error("expected error when sending on closed connection")
+	}
+}
+
+func TestWebSocketCloseWithReconnect(t *testing.T) {
+	sendCh := make(chan []byte, 10)
+	doneCh := make(chan struct{})
+
+	p := &WebSocketPipe{
+		send:              sendCh,
+		done:              doneCh,
+		closeSignal:       make(chan struct{}),
+		reconnectURL:      "ws://nonexistent:8080/ws/test",
+		tlsConfig:         nil,
+		reconnectInterval: 50 * time.Millisecond,
+		reconnectTimeout:  50 * time.Millisecond,
+		maxQueueLength:    10,
+		messageQueue:      make([][]byte, 0, 10),
+		startCtx:          context.Background(),
+		connected:         atomic.Bool{},
+	}
+	p.connected.Store(true)
+
+	// Trigger reconnection attempt
+	p.handleDisconnect()
+
+	// Wait for reconnect loop to start
+	time.Sleep(50 * time.Millisecond)
+
+	if !p.reconnecting.Load() {
+		t.Fatal("expected reconnecting to be true")
+	}
+
+	// Close should cancel reconnection and not panic
+	p.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	if p.reconnecting.Load() {
+		t.Error("reconnecting should be false after Close")
 	}
 }
