@@ -47,7 +47,8 @@ type Config struct {
 	ServerTLS TLSBundle `json:"server_tls"`
 	ClientTLS TLSBundle `json:"client_tls"`
 
-	Auth AuthConfig `json:"auth"`
+	Auth         AuthConfig `json:"auth"`
+	ClientApiKey string     `json:"client_api_key"`
 
 	RequireApproval      bool             `json:"require_approval"`
 	DefaultPermission    types.Permission `json:"default_permission"`
@@ -110,6 +111,7 @@ func Defaults() *Config {
 				AllowedSources: []string{},
 			},
 		},
+		ClientApiKey: "",
 	}
 }
 
@@ -194,6 +196,9 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("REMOTE_CONTROL_AUTH_PROXY_ALLOWED_SOURCES"); v != "" {
 		cfg.Auth.Proxy.AllowedSources = strings.Split(v, ",")
+	}
+	if v := os.Getenv("REMOTE_CONTROL_API_KEY"); v != "" {
+		cfg.ClientApiKey = v
 	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Log.DefaultLevel = v
