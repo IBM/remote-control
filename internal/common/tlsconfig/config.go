@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/IBM/alchemy-logging/src/go/alog"
 	types "github.com/gabe-l-hart/remote-control/internal/common"
 )
 
@@ -51,6 +52,26 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 // serverCAFile: CA certificate to trust when verifying the server certificate.
 // authMode: determines whether client certificates are sent (mtls) or not (proxy/none).
 func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, authMode types.AuthMode) (*tls.Config, error) {
+	switch authMode {
+	// If no auth, no TLS
+	case types.AuthModeNone:
+		return nil, nil
+	case types.AuthModeMTLS:
+		// mTLS mode - load client cert
+		if clientCertFile == "" || clientKeyFile == "" {
+			ch.Log(alog.WARNING, "[remote-control] mTLS mode but client certs not configured")
+			return nil, fmt.Errorf("mTLS mode missing client credential")
+		}
+	case types.AuthModeProxy:
+		// proxy mode - ignore client cert
+		if clientCertFile != "" || clientKeyFile != "" {
+			ch.Log(alog.WARNING, "Ignoring client key/cert in proxy auth mode")
+			clientCertFile = ""
+			clientKeyFile = ""
+		}
+	}
+
+	// NOTE: If empty, default to system CAs
 	serverCA, err := loadCertPool(serverCAFile)
 	if err != nil {
 		return nil, fmt.Errorf("load server CA: %w", err)
@@ -62,10 +83,7 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, au
 	}
 
 	// Only load client cert in mTLS mode
-	if authMode == types.AuthModeMTLS {
-		if clientCertFile == "" || clientKeyFile == "" {
-			return nil, fmt.Errorf("client cert/key required for mTLS mode")
-		}
+	if clientCertFile != "" && clientKeyFile != "" {
 		cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("load client cert/key: %w", err)
