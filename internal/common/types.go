@@ -245,3 +245,28 @@ type WSMessage struct {
 func (w *WSMessage) UnmarshalMessage(v interface{}) error {
 	return json.Unmarshal(w.Message, v)
 }
+
+/* -- Authentication Types ------------------------------------------------- */
+
+// AuthMode defines the authentication mode for the server
+type AuthMode string
+
+const (
+	AuthModeMTLS  AuthMode = "mtls"
+	AuthModeProxy AuthMode = "proxy"
+	AuthModeNone  AuthMode = "none"
+)
+
+// AuthContext holds authentication information for a request
+type AuthContext struct {
+	Mode     AuthMode
+	ClientID string
+	Verified bool
+	Source   string // "mtls", "proxy-header", "none"
+	Metadata map[string]string
+}
+
+// Context key for auth context
+type contextKey string
+
+const AuthContextKey contextKey = "auth_context"
