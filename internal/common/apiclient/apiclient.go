@@ -19,17 +19,22 @@ var ch = alog.UseChannel("APICLIENT")
 
 // APIClient is an HTTP client for the remote-control server API.
 type APIClient struct {
-	BaseURL    string
-	httpClient *http.Client
+	BaseURL   string
+	TLSConfig *tls.Config // Exported so websocket can share
 
-	// Exported so websocket can share
-	TLSConfig *tls.Config
+	httpClient *http.Client
+	apiKey     string
 }
 
 // NewAPIClient creates an APIClient for the given server URL.
 func NewAPIClient(cfg *config.Config) *APIClient {
 	httpClient, tlsCfg := buildHTTPClient(cfg)
-	return &APIClient{BaseURL: cfg.ServerURL, httpClient: httpClient, TLSConfig: tlsCfg}
+	return &APIClient{
+		BaseURL:    cfg.ServerURL,
+		TLSConfig:  tlsCfg,
+		httpClient: httpClient,
+		apiKey:     cfg.ClientApiKey,
+	}
 }
 
 /* -- Private Helpers ------------------------------------------------------- */
@@ -47,9 +52,25 @@ func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
 		return &http.Client{Timeout: timeout}, nil
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsCfg,
+		},
 	}, tlsCfg
+}
+
+func (c *APIClient) req(method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	if nil != body {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+	}
+	return req, nil
 }
 
 func (c *APIClient) post(path string, body any) (*http.Response, error) {
@@ -57,11 +78,19 @@ func (c *APIClient) post(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.httpClient.Post(c.BaseURL+path, "application/json", bytes.NewReader(data))
+	req, err := c.req(http.MethodPost, c.BaseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	return c.httpClient.Do(req)
 }
 
 func (c *APIClient) get(path string) (*http.Response, error) {
-	return c.httpClient.Get(c.BaseURL + path)
+	req, err := c.req(http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.httpClient.Do(req)
 }
 
 func (c *APIClient) patch(path string, body any) (*http.Response, error) {
@@ -69,16 +98,15 @@ func (c *APIClient) patch(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPatch, c.BaseURL+path, bytes.NewReader(data))
+	req, err := c.req(http.MethodPatch, c.BaseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	return c.httpClient.Do(req)
 }
 
 func (c *APIClient) delete(path string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+path, nil)
+	req, err := c.req(http.MethodDelete, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
