@@ -186,10 +186,10 @@ func (s *Session) AppendOutput(stream types.Stream, data []byte) {
 		if client.Info.Approval == types.ApprovalApproved {
 			sessCh.Log(alog.DEBUG4, "Sending chunk to %s", clientID)
 			wg.Add(1)
-			go func() {
+			go func(c *SessionClient) {
 				defer wg.Done()
-				Send(client, types.WSMessageOutput, &chunk)
-			}()
+				Send(c, types.WSMessageOutput, &chunk)
+			}(client)
 		}
 	}
 	wg.Wait()

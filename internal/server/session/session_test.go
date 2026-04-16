@@ -705,6 +705,157 @@ func TestConcurrentClientRegistration(t *testing.T) {
 }
 
 // ============================================================================
+// Race Condition Tests - Goroutine Closure Bug
+// ============================================================================
+
+func TestAppendOutputConcurrentClients(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
+
+	// Create multiple clients with approved status
+	numClients := 10
+	createdClients := make([]*SessionClient, numClients)
+	clientIDs := make([]string, numClients)
+
+	for i := 0; i < numClients; i++ {
+		clientID, client := sess.RegisterClient("", nil)
+		clientIDs[i] = clientID
+		createdClients[i] = client
+		// Approve the client
+		sess.ApproveClient(clientID, types.PermissionReadWrite)
+	}
+
+	// Rapidly send output chunks while verifying delivery
+	numChunks := 100
+	for i := 0; i < numChunks; i++ {
+		data := []byte(fmt.Sprintf("chunk%d", i))
+		sess.AppendOutput(types.StreamStdout, data)
+	}
+
+	// Verify each client received the correct messages
+	for idx, client := range createdClients {
+		queue := client.GetAllQueue(types.WSMessageOutput)
+		if len(queue) != numChunks {
+			t.Errorf("client %d: expected %d chunks, got %d", idx, numChunks, len(queue))
+		}
+
+		// Verify order is correct
+		for j, msg := range queue {
+			if chunk, ok := msg.(*types.OutputChunk); ok {
+				expectedData := fmt.Sprintf("chunk%d", j)
+				if string(chunk.Data) != expectedData {
+					t.Errorf("client %d chunk %d: expected %s, got %s", idx, j, expectedData, string(chunk.Data))
+				}
+				if chunk.Stream != types.StreamStdout {
+					t.Errorf("client %d chunk %d: stream mismatch", idx, j)
+				}
+			} else {
+				t.Errorf("client %d chunk %d: unexpected type %T", idx, j, msg)
+			}
+		}
+	}
+}
+
+func TestAppendOutputConcurrentClientsStress(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
+
+	// Create many clients
+	numClients := 20
+	createdClients := make([]*SessionClient, numClients)
+	clientIDs := make([]string, numClients)
+
+	for i := 0; i < numClients; i++ {
+		clientID, client := sess.RegisterClient("", nil)
+		clientIDs[i] = clientID
+		createdClients[i] = client
+		sess.ApproveClient(clientID, types.PermissionReadWrite)
+	}
+
+	// Stress test with rapid output
+	var wg sync.WaitGroup
+	numGoroutines := 50
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(chunkNum int) {
+			defer wg.Done()
+			sess.AppendOutput(types.StreamStdout, []byte(fmt.Sprintf("chunk%d", chunkNum)))
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all clients received messages (order may vary due to concurrency)
+	for idx, client := range createdClients {
+		queue := client.GetAllQueue(types.WSMessageOutput)
+		if len(queue) != numGoroutines {
+			t.Errorf("client %d: expected %d chunks, got %d", idx, numGoroutines, len(queue))
+		}
+	}
+}
+
+// ============================================================================
+// Race Condition Tests - Client Removal During Output
+// ============================================================================
+
+func TestRemoveClientsDuringOutput(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024})
+
+	// Create multiple clients
+	numClients := 10
+	createdClients := make([]*SessionClient, numClients)
+	clientIDs := make([]string, numClients)
+
+	for i := 0; i < numClients; i++ {
+		clientID, client := sess.RegisterClient("", nil)
+		clientIDs[i] = clientID
+		createdClients[i] = client
+		sess.ApproveClient(clientID, types.PermissionReadWrite)
+	}
+
+	// Start continuous output while removing clients
+	var wg sync.WaitGroup
+
+	// Output goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			sess.AppendOutput(types.StreamStdout, []byte(fmt.Sprintf("chunk%d", i)))
+		}
+	}()
+
+	// Remove goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(5 * time.Millisecond)
+		// Remove half the clients while output is being sent
+		for i := 0; i < numClients/2; i++ {
+			client := sess.GetClient(clientIDs[i])
+			if client != nil {
+				client.Close()
+			}
+			sess.mu.Lock()
+			delete(sess.clients, clientIDs[i])
+			sess.mu.Unlock()
+		}
+	}()
+
+	wg.Wait()
+
+	// Verify remaining clients received messages
+	for i := numClients / 2; i < numClients; i++ {
+		client := sess.GetClient(clientIDs[i])
+		if client == nil {
+			continue
+		}
+		queue := client.GetAllQueue(types.WSMessageOutput)
+		if len(queue) == 0 {
+			t.Errorf("client %d should have received messages", i)
+		}
+	}
+}
+
+// ============================================================================
 // Peek/Ack Race Condition Tests
 // ============================================================================
 
