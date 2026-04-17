@@ -2,9 +2,7 @@ package host
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,9 +16,9 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
@@ -29,7 +27,7 @@ var ch = alog.UseChannel("HOST")
 // Host manages the subprocess lifecycle and I/O proxying.
 type Host struct {
 	cfg    *config.Config
-	client *types.APIClient
+	client *apiclient.APIClient
 
 	// WebSocket connection for real-time communication
 	wsHost *WebSocketHost
@@ -50,48 +48,10 @@ type Host struct {
 
 // NewHost creates a Host from the given config.
 func NewHost(cfg *config.Config) *Host {
-	httpClient := buildHTTPClient(cfg)
 	return &Host{
 		cfg:    cfg,
-		client: types.NewAPIClient(cfg.ServerURL, httpClient),
+		client: apiclient.NewAPIClient(cfg),
 	}
-}
-
-// buildHTTPClient creates an http.Client with TLS configured if certs are available.
-func buildHTTPClient(cfg *config.Config) *http.Client {
-	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
-		return &http.Client{Timeout: 30 * time.Second}
-	}
-	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
-		cfg.ClientTLS.CertFile,
-		cfg.ClientTLS.KeyFile,
-		cfg.ClientTLS.TrustedCAFile,
-	)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
-		return &http.Client{Timeout: 30 * time.Second}
-	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
-}
-
-// buildTLSConfig creates a TLS config for WebSocket connections.
-func buildTLSConfig(cfg *config.Config) *tls.Config {
-	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
-		return nil
-	}
-	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
-		cfg.ClientTLS.CertFile,
-		cfg.ClientTLS.KeyFile,
-		cfg.ClientTLS.TrustedCAFile,
-	)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v", err)
-		return nil
-	}
-	return tlsCfg
 }
 
 // buildWebSocketConfig creates WebSocket connection config from main config.
@@ -382,9 +342,6 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 		return
 	}
 
-	// Build TLS config if available
-	tlsCfg := buildTLSConfig(h.cfg)
-
 	// Derive WebSocket URL from ServerURL
 	wsURL := ws.DeriveWebSocketURL(h.cfg.ServerURL)
 	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
@@ -393,7 +350,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 	wsConfig := buildWebSocketConfig(h.cfg)
 
 	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, tlsCfg, sessionID, types.HostClientID, wsConfig)
+	h.wsHost = NewWebSocketHost(wsURL, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
 
 	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
 	h.wsHost.OnPendingClient(func(clientID string) {

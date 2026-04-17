@@ -8,8 +8,21 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
+
+// AuthConfig holds authentication configuration
+type AuthConfig struct {
+	Mode  types.AuthMode `json:"mode"`
+	Proxy ProxyConfig    `json:"proxy"`
+}
+
+// ProxyConfig holds proxy authentication configuration
+type ProxyConfig struct {
+	IdentityHeader string   `json:"identity_header"`
+	RequireTLS     bool     `json:"require_tls"`
+	AllowedSources []string `json:"allowed_sources"`
+}
 
 // LoggingConfig holds the key configuration elements for logging
 type LoggingConfig struct {
@@ -33,6 +46,9 @@ type Config struct {
 	ServerURL string    `json:"server_url"`
 	ServerTLS TLSBundle `json:"server_tls"`
 	ClientTLS TLSBundle `json:"client_tls"`
+
+	Auth         AuthConfig `json:"auth"`
+	ClientApiKey string     `json:"client_api_key"`
 
 	RequireApproval      bool             `json:"require_approval"`
 	DefaultPermission    types.Permission `json:"default_permission"`
@@ -87,6 +103,15 @@ func Defaults() *Config {
 			Filters:      "",
 			Json:         false,
 		},
+		Auth: AuthConfig{
+			Mode: types.AuthModeMTLS,
+			Proxy: ProxyConfig{
+				IdentityHeader: "",
+				RequireTLS:     false,
+				AllowedSources: []string{},
+			},
+		},
+		ClientApiKey: "",
 	}
 }
 
@@ -156,6 +181,25 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("REMOTE_CONTROL_CLIENT_CA"); v != "" {
 		cfg.ClientTLS.TrustedCAFile = v
 	}
+	if v := os.Getenv("REMOTE_CONTROL_AUTH_MODE"); v != "" {
+		cfg.Auth.Mode = types.AuthMode(v)
+	}
+	if v := os.Getenv("REMOTE_CONTROL_AUTH_PROXY_IDENTITY_HEADER"); v != "" {
+		cfg.Auth.Proxy.IdentityHeader = v
+	}
+	if v := os.Getenv("REMOTE_CONTROL_AUTH_PROXY_REQUIRE_TLS"); v != "" {
+		if val, err := strToBool(v); nil != err {
+			return err
+		} else {
+			cfg.Auth.Proxy.RequireTLS = val
+		}
+	}
+	if v := os.Getenv("REMOTE_CONTROL_AUTH_PROXY_ALLOWED_SOURCES"); v != "" {
+		cfg.Auth.Proxy.AllowedSources = strings.Split(v, ",")
+	}
+	if v := os.Getenv("REMOTE_CONTROL_API_KEY"); v != "" {
+		cfg.ClientApiKey = v
+	}
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Log.DefaultLevel = v
 	}
@@ -193,6 +237,19 @@ func applyCLIOverrides(cfg *Config, overrides map[string]string) {
 	}
 	if v, ok := overrides["client-ca"]; ok {
 		cfg.ClientTLS.TrustedCAFile = v
+	}
+	if v, ok := overrides["auth-mode"]; ok {
+		cfg.Auth.Mode = types.AuthMode(v)
+	}
+	if v, ok := overrides["auth-proxy-identity-header"]; ok {
+		cfg.Auth.Proxy.IdentityHeader = v
+	}
+	if v, ok := overrides["auth-proxy-require-tls"]; ok {
+		if val, err := strToBool(v); nil != err {
+			return
+		} else {
+			cfg.Auth.Proxy.RequireTLS = val
+		}
 	}
 }
 

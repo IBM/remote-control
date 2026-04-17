@@ -11,6 +11,7 @@ import (
 
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	"github.com/gabe-l-hart/remote-control/internal/server"
 )
 
@@ -41,7 +42,7 @@ func mtlsServer(t *testing.T, dir string) (serverURL, serverCAFile, clientCAFile
 	cfg := &config.Config{RequireApproval: false, MaxOutputBuffer: 1024}
 	srv := server.NewServer("127.0.0.1:0", cfg)
 
-	tlsCfg, err := tlsconfig.BuildServerTLSConfig(serverCert, serverKey, clientCAcert)
+	tlsCfg, err := tlsconfig.BuildServerTLSConfig(serverCert, serverKey, clientCAcert, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("build server TLS: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestMTLSClientWithValidCert(t *testing.T) {
 		t.Fatalf("generate client cert: %v", err)
 	}
 
-	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile)
+	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("build client TLS: %v", err)
 	}

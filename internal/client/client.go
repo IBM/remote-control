@@ -2,10 +2,8 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -15,52 +13,30 @@ import (
 	"golang.org/x/term"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
 )
 
 var ch = alog.UseChannel("CLIENT")
 
 type Client struct {
-	cfg       *config.Config
-	api       *types.APIClient
-	clientID  string
-	tlsConfig *tls.Config
-	wsClient  *WebSocketConnection
+	cfg      *config.Config
+	api      *apiclient.APIClient
+	clientID string
+	wsClient *WebSocketConnection
 }
 
 func NewClient(cfg *config.Config) *Client {
-	httpClient, tlsCfg := buildHTTPClient(cfg)
 	return &Client{
-		cfg:       cfg,
-		api:       types.NewAPIClient(cfg.ServerURL, httpClient),
-		clientID:  "",
-		tlsConfig: tlsCfg,
+		cfg:      cfg,
+		api:      apiclient.NewAPIClient(cfg),
+		clientID: "",
 	}
 }
 
 /* -- Private Helpers ------------------------------------------------------- */
-
-func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
-	if cfg.ClientTLS.CertFile == "" || cfg.ClientTLS.KeyFile == "" || cfg.ClientTLS.TrustedCAFile == "" {
-		return &http.Client{Timeout: 30 * time.Second}, nil
-	}
-	tlsCfg, err := tlsconfig.BuildClientTLSConfig(
-		cfg.ClientTLS.CertFile,
-		cfg.ClientTLS.KeyFile,
-		cfg.ClientTLS.TrustedCAFile,
-	)
-	if err != nil {
-		ch.Log(alog.WARNING, "[remote-control] TLS config error: %v; falling back to plain HTTP", err)
-		return &http.Client{Timeout: 30 * time.Second}, nil
-	}
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}, tlsCfg
-}
 
 func buildWebSocketConfig(cfg *config.Config) *ws.WebSocketConfig {
 	return &ws.WebSocketConfig{
@@ -252,7 +228,7 @@ func (c *Client) initWebSocket(ctx context.Context, sessionID string) {
 	wsConfig := buildWebSocketConfig(c.cfg)
 
 	// Create WebSocket connection
-	c.wsClient = NewWebSocketConnection(wsURL, c.tlsConfig, c.clientID, sessionID, wsConfig)
+	c.wsClient = NewWebSocketConnection(wsURL, c.api.TLSConfig, c.clientID, sessionID, wsConfig)
 
 	// Render output when received on websocket
 	c.wsClient.OnOutput(func(chunk types.OutputChunk) {

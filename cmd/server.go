@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,14 +15,17 @@ import (
 
 	"github.com/gabe-l-hart/remote-control/internal/common/config"
 	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	"github.com/gabe-l-hart/remote-control/internal/server"
 )
 
 var ch = alog.UseChannel("SERVER")
 
 var (
-	serverAddr         string
-	serverListSessions bool
+	serverAddr              string
+	authMode                string
+	authProxyIdentityHeader string
+	authProxyRequireTLS     bool
 )
 
 var serverCmd = &cobra.Command{
@@ -34,6 +38,9 @@ var serverCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().StringVar(&serverAddr, "addr", ":8443", "Address to listen on")
+	serverCmd.Flags().StringVar(&authMode, "auth-mode", "", "Authentication mode: mtls, proxy, none")
+	serverCmd.Flags().StringVar(&authProxyIdentityHeader, "auth-proxy-identity-header", "", "Identity header name for proxy auth")
+	serverCmd.Flags().BoolVar(&authProxyRequireTLS, "auth-proxy-require-tls", false, "Require TLS for proxy auth")
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
@@ -42,10 +49,29 @@ func runServer(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Warn on expiring certs.
-	tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile)
-	tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
-	tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
+	// Configure auth mode
+	if authMode != "" {
+		if authMode != "mtls" && authMode != "proxy" && authMode != "none" {
+			return fmt.Errorf("invalid auth mode: %s", authMode)
+		}
+		cfg.Auth.Mode = types.AuthMode(authMode)
+	}
+	if authProxyIdentityHeader != "" {
+		cfg.Auth.Proxy.IdentityHeader = authProxyIdentityHeader
+	}
+	if authProxyRequireTLS {
+		cfg.Auth.Proxy.RequireTLS = authProxyRequireTLS
+	}
+
+	// Log authentication mode
+	ch.Log(alog.INFO, "[remote-control] Authentication mode: %s", cfg.Auth.Mode)
+
+	// Warn on expiring certs (only in mTLS mode)
+	if cfg.Auth.Mode == types.AuthModeMTLS {
+		tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile)
+		tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
+		tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
+	}
 
 	srv := server.NewServer(serverAddr, cfg)
 	ch.Log(alog.INFO, "[remote-control] server listening on %s", serverAddr)
@@ -64,19 +90,25 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Use TLS if server cert/key are configured.
+	var tlsCfg *tls.Config
 	if cfg.ServerTLS.CertFile != "" && cfg.ServerTLS.KeyFile != "" {
-		tlsCfg, err := tlsconfig.BuildServerTLSConfig(
+		tlsCfg, err = tlsconfig.BuildServerTLSConfig(
 			cfg.ServerTLS.CertFile,
 			cfg.ServerTLS.KeyFile,
 			cfg.ServerTLS.TrustedCAFile,
+			cfg.Auth.Mode,
 		)
 		if err != nil {
 			return fmt.Errorf("build TLS config: %w", err)
 		}
+	}
+	if nil != tlsCfg {
+		ch.Log(alog.INFO, "[remote-control] Serving TLS on %s", serverAddr)
 		if err := srv.ListenAndServeTLS(tlsCfg); err != nil && err != http.ErrServerClosed {
 			return err
 		}
 	} else {
+		ch.Log(alog.INFO, "[remote-control] Serving Insecure on %s", serverAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}

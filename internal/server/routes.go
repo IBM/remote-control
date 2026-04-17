@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	types "github.com/gabe-l-hart/remote-control/internal/common"
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
 // handlers wires all HTTP routes onto mux.
