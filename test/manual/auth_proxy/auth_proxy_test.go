@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -51,11 +52,12 @@ func runProxy() {
 	certPEM := os.Getenv("TLS_CERT_PEM")
 	keyPEM := os.Getenv("TLS_KEY_PEM")
 	listenAddr := os.Getenv("LISTEN_ADDR")
+	apikey := os.Getenv("API_KEY")
 	if listenAddr == "" {
 		listenAddr = ":8443"
 	}
 
-	// Load or generate certificate
+	// Load cert
 	var tlsCert tls.Certificate
 	var err error
 
@@ -85,6 +87,15 @@ func runProxy() {
 
 	// Proxy handler: forwards all requests (including WebSocket) to target
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apikey != "" {
+			if auth := r.Header.Get("Authorization"); auth == "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			} else if parts := strings.Split(auth, " "); len(parts) != 2 || parts[1] != apikey {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
 		log.Log(alog.DEBUG, "Proxying request: %s %s", r.Method, r.URL.Path)
 		proxy.ServeHTTP(w, r)
 	})
