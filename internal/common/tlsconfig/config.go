@@ -15,16 +15,13 @@ import (
 // clientCAFile: CA certificate to trust when verifying connecting client certificates.
 // authMode: determines whether client certificates are required (mtls) or optional (proxy/none).
 func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, authMode types.AuthMode) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(serverCertFile, serverKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server cert/key: %w", err)
-	}
 
-	var clientAuth tls.ClientAuthType
-	var clientCAs *x509.CertPool
+	var clientAuth tls.ClientAuthType = tls.NoClientCert
+	var clientCAs *x509.CertPool = nil
 
 	switch authMode {
 	case types.AuthModeMTLS:
+		ch.Log(alog.DEBUG, "Configuring server mTLS Auth")
 		// Require and verify client certificates
 		clientCA, err := loadCertPool(clientCAFile)
 		if err != nil {
@@ -33,10 +30,14 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 		clientAuth = tls.RequireAndVerifyClientCert
 		clientCAs = clientCA
 
-	case types.AuthModeProxy, types.AuthModeNone:
-		// No client certificate required
-		clientAuth = tls.NoClientCert
-		clientCAs = nil
+	case types.AuthModeProxy:
+		ch.Log(alog.DEBUG, "Configuring server w/out TLS for proxy auth")
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(serverCertFile, serverKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load server cert/key: %w", err)
 	}
 
 	return &tls.Config{
