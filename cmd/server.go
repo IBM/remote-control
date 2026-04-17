@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -89,8 +90,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Use TLS if server cert/key are configured.
+	var tlsCfg *tls.Config
 	if cfg.ServerTLS.CertFile != "" && cfg.ServerTLS.KeyFile != "" {
-		tlsCfg, err := tlsconfig.BuildServerTLSConfig(
+		tlsCfg, err = tlsconfig.BuildServerTLSConfig(
 			cfg.ServerTLS.CertFile,
 			cfg.ServerTLS.KeyFile,
 			cfg.ServerTLS.TrustedCAFile,
@@ -99,10 +101,14 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("build TLS config: %w", err)
 		}
+	}
+	if nil != tlsCfg {
+		ch.Log(alog.INFO, "[remote-control] Serving TLS on %s", serverAddr)
 		if err := srv.ListenAndServeTLS(tlsCfg); err != nil && err != http.ErrServerClosed {
 			return err
 		}
 	} else {
+		ch.Log(alog.INFO, "[remote-control] Serving Insecure on %s", serverAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return err
 		}
