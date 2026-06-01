@@ -35,9 +35,10 @@ type LoggingConfig struct {
 
 // TLSBundle holds TLS certificate configuration for one side of a connection.
 type TLSBundle struct {
-	CertFile      string `json:"cert_file"`
-	KeyFile       string `json:"key_file"`
-	TrustedCAFile string `json:"trusted_ca_file"`
+	CertFile           string `json:"cert_file"`
+	KeyFile            string `json:"key_file"`
+	TrustedCAFile      string `json:"trusted_ca_file"`
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
 }
 
 // Config holds the full remote-control configuration.
@@ -45,9 +46,11 @@ type Config struct {
 	// ConfigDir is determined from REMOTE_CONTROL_HOME; not persisted.
 	ConfigDir string `json:"-"`
 
-	ServerURL string    `json:"server_url"`
-	ServerTLS TLSBundle `json:"server_tls"`
-	ClientTLS TLSBundle `json:"client_tls"`
+	// ServerURLs is the list of server URLs to try when connecting.
+	// The first URL that responds successfully is used.
+	ServerURLs []string  `json:"server_urls"`
+	ServerTLS  TLSBundle `json:"server_tls"`
+	ClientTLS  TLSBundle `json:"client_tls"`
 
 	Auth         AuthConfig `json:"auth"`
 	ClientApiKey string     `json:"client_api_key"`
@@ -85,7 +88,7 @@ func Defaults() *Config {
 	}
 	return &Config{
 		ConfigDir:                         configDir,
-		ServerURL:                         "https://localhost:8443",
+		ServerURLs:                        []string{"https://localhost:8443"},
 		RequireApproval:                   false,
 		DefaultPermission:                 types.PermissionReadWrite,
 		PollIntervalMs:                    100,
@@ -129,6 +132,18 @@ func expandTilde(path string) string {
 	return path
 }
 
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 func expandTildePaths(cfg *Config) {
 	cfg.ConfigDir = expandTilde(cfg.ConfigDir)
 	cfg.ServerTLS.CertFile = expandTilde(cfg.ServerTLS.CertFile)
@@ -162,8 +177,10 @@ func strToBool(s string) (bool, error) {
 }
 
 func applyEnvOverrides(cfg *Config) error {
-	if v := os.Getenv("REMOTE_CONTROL_SERVER_URL"); v != "" {
-		cfg.ServerURL = v
+	if v := os.Getenv("REMOTE_CONTROL_SERVER_URLS"); v != "" {
+		cfg.ServerURLs = splitAndTrim(v)
+	} else if v := os.Getenv("REMOTE_CONTROL_SERVER_URL"); v != "" {
+		cfg.ServerURLs = []string{v}
 	}
 	if v := os.Getenv("REMOTE_CONTROL_SERVER_CERT"); v != "" {
 		cfg.ServerTLS.CertFile = v
@@ -182,6 +199,13 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("REMOTE_CONTROL_CLIENT_CA"); v != "" {
 		cfg.ClientTLS.TrustedCAFile = v
+	}
+	if v := os.Getenv("REMOTE_CONTROL_INSECURE_SKIP_VERIFY"); v != "" {
+		if val, err := strToBool(v); nil != err {
+			return err
+		} else {
+			cfg.ClientTLS.InsecureSkipVerify = val
+		}
 	}
 	if v := os.Getenv("REMOTE_CONTROL_AUTH_MODE"); v != "" {
 		cfg.Auth.Mode = types.AuthMode(v)
@@ -219,8 +243,10 @@ func applyEnvOverrides(cfg *Config) error {
 }
 
 func applyCLIOverrides(cfg *Config, overrides map[string]string) {
-	if v, ok := overrides["server"]; ok {
-		cfg.ServerURL = v
+	if v, ok := overrides["server-urls"]; ok {
+		cfg.ServerURLs = splitAndTrim(v)
+	} else if v, ok := overrides["server"]; ok {
+		cfg.ServerURLs = []string{v}
 	}
 	if v, ok := overrides["server-cert"]; ok {
 		cfg.ServerTLS.CertFile = v
@@ -239,6 +265,13 @@ func applyCLIOverrides(cfg *Config, overrides map[string]string) {
 	}
 	if v, ok := overrides["client-ca"]; ok {
 		cfg.ClientTLS.TrustedCAFile = v
+	}
+	if v, ok := overrides["insecure-skip-verify"]; ok {
+		if val, err := strToBool(v); nil != err {
+			return
+		} else {
+			cfg.ClientTLS.InsecureSkipVerify = val
+		}
 	}
 	if v, ok := overrides["auth-mode"]; ok {
 		cfg.Auth.Mode = types.AuthMode(v)
@@ -335,11 +368,13 @@ func Verify(cfg *Config) error {
 	}
 
 	// Make sure auth mode and server URL scheme match
-	if u, err := url.Parse(cfg.ServerURL); nil != err {
-		return err
-	} else if (u.Scheme == "http" && cfg.Auth.Mode == types.AuthModeMTLS) ||
-		(u.Scheme == "https" && cfg.Auth.Mode != types.AuthModeMTLS) {
-		return fmt.Errorf("MISCONFIGURATION: Scheme mismatch between ServerURL [%s] / Auth.Mode [%s]", cfg.ServerURL, cfg.Auth.Mode)
+	for _, serverUrl := range cfg.ServerURLs {
+		if u, err := url.Parse(serverUrl); nil != err {
+			return err
+		} else if (u.Scheme == "http" && cfg.Auth.Mode == types.AuthModeMTLS) ||
+			(u.Scheme == "https" && cfg.Auth.Mode != types.AuthModeMTLS) {
+			return fmt.Errorf("MISCONFIGURATION: Scheme mismatch between ServerURL [%s] / Auth.Mode [%s]", serverUrl, cfg.Auth.Mode)
+		}
 	}
 
 	return nil

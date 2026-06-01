@@ -19,12 +19,14 @@ func cleanEnv(t *testing.T, dir string) {
 	t.Helper()
 	t.Setenv("REMOTE_CONTROL_HOME", dir)
 	t.Setenv("REMOTE_CONTROL_SERVER_URL", "")
+	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "")
 	t.Setenv("REMOTE_CONTROL_SERVER_CERT", "")
 	t.Setenv("REMOTE_CONTROL_SERVER_KEY", "")
 	t.Setenv("REMOTE_CONTROL_SERVER_CA", "")
 	t.Setenv("REMOTE_CONTROL_CLIENT_CERT", "")
 	t.Setenv("REMOTE_CONTROL_CLIENT_KEY", "")
 	t.Setenv("REMOTE_CONTROL_CLIENT_CA", "")
+	t.Setenv("REMOTE_CONTROL_INSECURE_SKIP_VERIFY", "")
 	t.Setenv("LOG_LEVEL", "")
 	t.Setenv("LOG_FILTERS", "")
 	t.Setenv("LOG_JSON", "")
@@ -37,8 +39,11 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL != "https://localhost:8443" {
-		t.Errorf("expected default server URL, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "https://localhost:8443" {
+		t.Errorf("expected default server URL, got %s", cfg.ServerURL())
+	}
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "https://localhost:8443" {
+		t.Errorf("expected ServerURLs to have one default URL, got %v", cfg.ServerURLs)
 	}
 	if cfg.RequireApproval {
 		t.Error("expected RequireApproval=false by default")
@@ -66,8 +71,44 @@ func TestLoadWithServerURLEnvOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL != "http://test-server:9090" {
-		t.Errorf("expected env override URL, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "http://test-server:9090" {
+		t.Errorf("expected env override URL, got %s", cfg.ServerURL())
+	}
+}
+
+func TestLoadWithServerURLSEnvOverride(t *testing.T) {
+	cleanEnv(t, t.TempDir())
+	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://url1:8080, http://url2:9090,http://url3:7070")
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.ServerURLs) != 3 {
+		t.Fatalf("expected 3 URLs, got %d: %v", len(cfg.ServerURLs), cfg.ServerURLs)
+	}
+	if cfg.ServerURLs[0] != "http://url1:8080" {
+		t.Errorf("expected http://url1:8080, got %s", cfg.ServerURLs[0])
+	}
+	if cfg.ServerURLs[1] != "http://url2:9090" {
+		t.Errorf("expected http://url2:9090, got %s", cfg.ServerURLs[1])
+	}
+	if cfg.ServerURLs[2] != "http://url3:7070" {
+		t.Errorf("expected http://url3:7070, got %s", cfg.ServerURLs[2])
+	}
+}
+
+func TestLoadWithServerURLSEnvTakesPriorityOverServerURL(t *testing.T) {
+	cleanEnv(t, t.TempDir())
+	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://single:8080")
+	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://multi1:8080,http://multi2:9090")
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.ServerURLs) != 2 {
+		t.Fatalf("expected 2 URLs, got %d: %v", len(cfg.ServerURLs), cfg.ServerURLs)
 	}
 }
 
@@ -108,8 +149,47 @@ func TestLoadWithCLIOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL != "http://cli-server:8080" {
-		t.Errorf("expected CLI override URL, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "http://cli-server:8080" {
+		t.Errorf("expected CLI override URL, got %s", cfg.ServerURL())
+	}
+}
+
+func TestLoadWithCLIServerURLsOverride(t *testing.T) {
+	cleanEnv(t, t.TempDir())
+
+	cfg, err := Load(map[string]string{
+		"server-urls": "http://c1:8080,http://c2:9090",
+	})
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.ServerURLs) != 2 {
+		t.Fatalf("expected 2 URLs, got %d: %v", len(cfg.ServerURLs), cfg.ServerURLs)
+	}
+	if cfg.ServerURLs[0] != "http://c1:8080" {
+		t.Errorf("expected http://c1:8080, got %s", cfg.ServerURLs[0])
+	}
+	if cfg.ServerURLs[1] != "http://c2:9090" {
+		t.Errorf("expected http://c2:9090, got %s", cfg.ServerURLs[1])
+	}
+}
+
+func TestCLIServerURLsTakePriorityOverServerURL(t *testing.T) {
+	cleanEnv(t, t.TempDir())
+	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://env-multi1:8080,http://env-multi2:9090")
+	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://env-single:7070")
+
+	cfg, err := Load(map[string]string{
+		"server-urls": "http://cli-multi1:8080,http://cli-multi2:9090",
+	})
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.ServerURLs) != 2 {
+		t.Fatalf("expected 2 URLs, got %d: %v", len(cfg.ServerURLs), cfg.ServerURLs)
+	}
+	if cfg.ServerURLs[0] != "http://cli-multi1:8080" {
+		t.Errorf("expected http://cli-multi1:8080, got %s", cfg.ServerURLs[0])
 	}
 }
 
@@ -124,8 +204,8 @@ func TestCLIOverridesTakePriorityOverEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL != "http://cli-server:8080" {
-		t.Errorf("expected CLI server to win over env, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "http://cli-server:8080" {
+		t.Errorf("expected CLI server to win over env, got %s", cfg.ServerURL())
 	}
 }
 
@@ -156,7 +236,7 @@ func TestLoadWithConfigFile(t *testing.T) {
 	cleanEnv(t, dir)
 
 	fileCfg := map[string]any{
-		"server_url":       "http://file-server:7777",
+		"server_urls":      []string{"http://file-server:7777"},
 		"auth":             map[string]any{"mode": "none"},
 		"require_approval": false,
 	}
@@ -169,11 +249,33 @@ func TestLoadWithConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL != "http://file-server:7777" {
-		t.Errorf("expected file server URL, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "http://file-server:7777" {
+		t.Errorf("expected file server URL, got %s", cfg.ServerURL())
 	}
 	if cfg.RequireApproval {
 		t.Error("expected RequireApproval=false from file")
+	}
+}
+
+func TestLoadWithConfigFileMultipleURLs(t *testing.T) {
+	dir := t.TempDir()
+	cleanEnv(t, dir)
+
+	fileCfg := map[string]any{
+		"server_urls":      []string{"http://url1:8080", "http://url2:9090"},
+		"require_approval": false,
+	}
+	data, _ := json.MarshalIndent(fileCfg, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(cfg.ServerURLs) != 2 {
+		t.Fatalf("expected 2 URLs, got %d: %v", len(cfg.ServerURLs), cfg.ServerURLs)
 	}
 }
 
@@ -183,8 +285,8 @@ func TestEnvOverridesTakePriorityOverConfigFile(t *testing.T) {
 
 	// Config file sets one URL.
 	fileCfg := map[string]any{
-		"server_url": "http://file-server:7777",
-		"auth":       map[string]any{"mode": "none"},
+		"server_urls": []string{"http://file-server:7777"},
+		"auth":        map[string]any{"mode": "none"},
 	}
 	data, _ := json.MarshalIndent(fileCfg, "", "  ")
 	os.WriteFile(filepath.Join(dir, "config.json"), data, 0600) //nolint:errcheck
@@ -197,8 +299,8 @@ func TestEnvOverridesTakePriorityOverConfigFile(t *testing.T) {
 		t.Fatalf("Load error: %v", err)
 	}
 	// Env wins over file.
-	if cfg.ServerURL != "http://env-server:9090" {
-		t.Errorf("expected env server to win over file, got %s", cfg.ServerURL)
+	if cfg.ServerURL() != "http://env-server:9090" {
+		t.Errorf("expected env server to win over file, got %s", cfg.ServerURL())
 	}
 }
 
@@ -207,7 +309,7 @@ func TestSaveAndLoad(t *testing.T) {
 
 	cfg := &Config{
 		ConfigDir:         dir,
-		ServerURL:         "https://my-server:8443",
+		ServerURLs:        []string{"https://my-server:8443"},
 		RequireApproval:   false,
 		DefaultPermission: "read-only",
 		PollIntervalMs:    1000,
@@ -234,8 +336,8 @@ func TestSaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if loaded.ServerURL != "https://my-server:8443" {
-		t.Errorf("expected saved URL, got %s", loaded.ServerURL)
+	if loaded.ServerURL() != "https://my-server:8443" {
+		t.Errorf("expected saved URL, got %s", loaded.ServerURL())
 	}
 	if loaded.RequireApproval {
 		t.Error("expected RequireApproval=false after load")
@@ -248,14 +350,36 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestSaveMultipleURLs(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &Config{
+		ConfigDir:  dir,
+		ServerURLs: []string{"http://url1:8080", "http://url2:9090"},
+		Log:        LoggingConfig{DefaultLevel: "info"},
+	}
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	cleanEnv(t, dir)
+	loaded, err := Load(nil)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if len(loaded.ServerURLs) != 2 {
+		t.Fatalf("expected 2 saved URLs, got %d: %v", len(loaded.ServerURLs), loaded.ServerURLs)
+	}
+}
+
 func TestSaveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	subDir := filepath.Join(dir, "nested", "config")
 
 	cfg := &Config{
-		ConfigDir: subDir,
-		ServerURL: "https://example.com",
-		Log:       LoggingConfig{DefaultLevel: "info"},
+		ConfigDir:  subDir,
+		ServerURLs: []string{"https://example.com"},
+		Log:        LoggingConfig{DefaultLevel: "info"},
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save error: %v", err)
@@ -417,6 +541,34 @@ func TestConfigVerify(t *testing.T) {
 			t.Errorf("[%s] Expected error, but Verify passed", tt.name)
 		} else if !tt.expectError && nil != err {
 			t.Errorf("[%s] Expected Verify to pass; got error: %v", tt.name, err)
+		}
+	}
+}
+
+func TestSplitAndTrim(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"  ", nil},
+		{"a", []string{"a"}},
+		{"a,b", []string{"a", "b"}},
+		{"a, b, c", []string{"a", "b", "c"}},
+		{" a , b , c ", []string{"a", "b", "c"}},
+		{"a,,b", []string{"a", "b"}},
+		{"a, ,b", []string{"a", "b"}},
+	}
+	for _, tc := range cases {
+		got := splitAndTrim(tc.input)
+		if len(got) != len(tc.want) {
+			t.Errorf("splitAndTrim(%q): expected %v, got %v", tc.input, tc.want, got)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("splitAndTrim(%q)[%d]: expected %q, got %q", tc.input, i, tc.want[i], got[i])
+			}
 		}
 	}
 }
