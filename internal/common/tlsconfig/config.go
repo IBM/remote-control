@@ -50,9 +50,9 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 // BuildClientTLSConfig constructs the TLS configuration for clients (host wrapper, connect).
 // clientCertFile/clientKeyFile: this client's identity certificate and key (both optional).
 // serverCAFile: CA certificate to trust when verifying the server certificate (optional, falls back to system CAs).
-// insecureSkipVerify: if true, skips hostname verification (not verified by default).
+// skipHostnameVerification: if true, skips only hostname verification (all other cert verification still occurs).
 // authMode: determines whether client certificates are sent (mtls) or not (proxy/none).
-func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, insecureSkipVerify bool, authMode types.AuthMode) (*tls.Config, error) {
+func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, skipHostnameVerification bool, authMode types.AuthMode) (*tls.Config, error) {
 	switch authMode {
 	// If no auth, no TLS
 	case types.AuthModeNone:
@@ -81,7 +81,7 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, in
 		RootCAs:    rootCAs,
 	}
 
-	if insecureSkipVerify {
+	if skipHostnameVerification {
 		config.VerifyPeerCertificate = verifyPeerCertificateNoHostname(rootCAs)
 	}
 

@@ -229,8 +229,8 @@ func TestBuildClientTLSConfig(t *testing.T) {
 	if tlsCfg.RootCAs == nil {
 		t.Error("expected non-nil RootCAs")
 	}
-	if tlsCfg.InsecureSkipVerify {
-		t.Error("expected InsecureSkipVerify=false")
+	if tlsCfg.VerifyPeerCertificate != nil {
+		t.Error("expected VerifyPeerCertificate to be nil when skipHostnameVerification=false")
 	}
 }
 
@@ -283,19 +283,19 @@ func TestBuildClientTLSConfigNoServerCA(t *testing.T) {
 	if tlsCfg == nil {
 		t.Fatal("expected non-nil TLS config")
 	}
-	if tlsCfg.InsecureSkipVerify {
-		t.Error("expected InsecureSkipVerify=false")
+	if tlsCfg.VerifyPeerCertificate != nil {
+		t.Error("expected VerifyPeerCertificate to be nil when skipHostnameVerification=false")
 	}
 }
 
-func TestBuildClientTLSConfigInsecureSkipVerify(t *testing.T) {
+func TestBuildClientTLSConfigSkipHostnameVerification(t *testing.T) {
 	_ = t.TempDir()
 	tlsCfg, err := BuildClientTLSConfig("", "", "", true, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("BuildClientTLSConfig error: %v", err)
 	}
 	if tlsCfg.VerifyPeerCertificate == nil {
-		t.Error("expected VerifyPeerCertificate to be set when insecureSkipVerify=true")
+		t.Error("expected VerifyPeerCertificate to be set when skipHostnameVerification=true")
 	}
 }
 

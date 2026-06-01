@@ -16,12 +16,12 @@ import (
 var chCli = alog.UseChannel("CLI")
 
 var (
-	flagServerURLs string
-	flagClientCert string
-	flagClientKey  string
-	flagClientCA   string
-	flagInsecure   bool
-	flagCExpr      string
+	flagServerURLs   string
+	flagClientCert   string
+	flagClientKey    string
+	flagClientCA     string
+	flagSkipHostname bool
+	flagCExpr        string
 )
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
@@ -41,7 +41,7 @@ var knownRCFlagValues = map[string]bool{
 	"--client-cert":          true,
 	"--client-key":           true,
 	"--client-ca":            true,
-	"--insecure-skip-verify": true,
+	"--skip-hostname-verify": true,
 	"-c":                     true,
 	"--c":                    true,
 }
@@ -90,7 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagClientCert, "client-cert", "", "Client TLS certificate file")
 	rootCmd.PersistentFlags().StringVar(&flagClientKey, "client-key", "", "Client TLS key file")
 	rootCmd.PersistentFlags().StringVar(&flagClientCA, "client-ca", "", "CA cert file to trust for server certificate")
-	rootCmd.PersistentFlags().BoolVar(&flagInsecure, "insecure-skip-verify", false, "Skip server TLS hostname verification")
+	rootCmd.PersistentFlags().BoolVar(&flagSkipHostname, "skip-hostname-verify", false, "Skip server TLS hostname verification")
 	rootCmd.Flags().StringVarP(&flagCExpr, "c", "c", "", "Shell expression to execute via sh -c")
 }
 
@@ -181,8 +181,8 @@ func cliOverrides() map[string]string {
 	if flagClientCA != "" {
 		overrides["client-ca"] = flagClientCA
 	}
-	if flagInsecure {
-		overrides["insecure-skip-verify"] = "true"
+	if flagSkipHostname {
+		overrides["skip-hostname-verify"] = "true"
 	}
 	return overrides
 }

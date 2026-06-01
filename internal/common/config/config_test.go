@@ -26,7 +26,7 @@ func cleanEnv(t *testing.T, dir string) {
 	t.Setenv("REMOTE_CONTROL_CLIENT_CERT", "")
 	t.Setenv("REMOTE_CONTROL_CLIENT_KEY", "")
 	t.Setenv("REMOTE_CONTROL_CLIENT_CA", "")
-	t.Setenv("REMOTE_CONTROL_INSECURE_SKIP_VERIFY", "")
+	t.Setenv("REMOTE_CONTROL_SKIP_HOSTNAME_VERIFICATION", "")
 	t.Setenv("LOG_LEVEL", "")
 	t.Setenv("LOG_FILTERS", "")
 	t.Setenv("LOG_JSON", "")
