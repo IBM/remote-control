@@ -22,13 +22,11 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 	switch authMode {
 	case types.AuthModeMTLS:
 		ch.Log(alog.DEBUG, "Configuring server mTLS Auth")
-		// Require and verify client certificates
-		clientCA, err := loadCertPool(clientCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("load client CA: %w", err)
+		// Require and verify client certificates (clientCAFile is optional, falls back to system CAs)
+		clientCAs = loadCertPoolOrSystem(clientCAFile)
+		if clientCAs != nil {
+			clientAuth = tls.RequireAndVerifyClientCert
 		}
-		clientAuth = tls.RequireAndVerifyClientCert
-		clientCAs = clientCA
 
 	case types.AuthModeProxy:
 		ch.Log(alog.DEBUG, "Configuring server w/out TLS for proxy auth")
@@ -59,10 +57,11 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, in
 	case types.AuthModeNone:
 		return nil, nil
 	case types.AuthModeMTLS:
-		// mTLS mode - load client cert
-		if clientCertFile == "" || clientKeyFile == "" {
-			ch.Log(alog.WARNING, "[remote-control] mTLS mode but client certs not configured")
-			return nil, fmt.Errorf("mTLS mode missing client credential")
+		// Log if client credentials are partially configured
+		if clientCertFile == "" && clientKeyFile == "" {
+			ch.Log(alog.DEBUG, "[remote-control] mTLS mode but no client credentials configured")
+		} else if clientCertFile == "" || clientKeyFile == "" {
+			ch.Log(alog.DEBUG, "[remote-control] mTLS mode with partial credentials (cert and key must both be present)")
 		}
 	case types.AuthModeProxy:
 		// proxy mode - ignore client cert
@@ -73,11 +72,8 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, in
 		}
 	}
 
-	// NOTE: If empty, default to system CAs
-	serverCA, err := loadCertPool(serverCAFile)
-	if err != nil {
-		return nil, fmt.Errorf("load server CA: %w", err)
-	}
+	// Load CA pool (falls back to system CAs if empty)
+	rootCAs := loadCertPoolOrSystem(serverCAFile)
 
 	config := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -85,7 +81,7 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, in
 		InsecureSkipVerify: insecureSkipVerify,
 	}
 
-	// Only load client cert in mTLS mode
+	// Only load client cert when both cert AND key are present
 	if clientCertFile != "" && clientKeyFile != "" {
 		cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
 		if err != nil {
@@ -108,4 +104,30 @@ func loadCertPool(caFile string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("no valid certificates found in %s", caFile)
 	}
 	return pool, nil
+}
+
+// loadCertPoolOrSystem loads a PEM CA certificate, or returns the system
+// root CAs if caFile is empty. Returns nil only if caFile is empty and
+// system roots are unavailable (very rare).
+func loadCertPoolOrSystem(caFile string) *x509.CertPool {
+	if caFile == "" {
+		// Fall back to system root CAs
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			ch.Log(alog.DEBUG, "[remote-control] no system cert pool available: %v", err)
+			return nil
+		}
+		return pool
+	}
+	pool, err := loadCertPool(caFile)
+	if err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] failed to load CA from %s, falling back to system CAs: %v", caFile, err)
+		systemPool, sysErr := x509.SystemCertPool()
+		if sysErr != nil {
+			ch.Log(alog.WARNING, "[remote-control] no system cert pool available: %v", sysErr)
+			return nil
+		}
+		return systemPool
+	}
+	return pool
 }

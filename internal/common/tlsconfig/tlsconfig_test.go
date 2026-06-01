@@ -257,9 +257,81 @@ func TestBuildClientTLSConfigBadCA(t *testing.T) {
 	badCA := filepath.Join(dir, "bad-ca.crt")
 	os.WriteFile(badCA, []byte("not a CA cert"), 0600) //nolint:errcheck
 
+	// Bad CA should fall back to system CAs (no error)
 	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, badCA, false, types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig error: %v", err)
+	}
 	if tlsCfg == nil {
 		t.Fatal("expected non-nil TLS config")
+	}
+	// Client cert should still be loaded
+	if len(tlsCfg.Certificates) != 1 {
+		t.Errorf("expected 1 certificate, got %d", len(tlsCfg.Certificates))
+	}
+}
+
+// --- BuildClientTLSConfig with partial credentials ---
+
+func TestBuildClientTLSConfigNoServerCA(t *testing.T) {
+	_ = t.TempDir()
+	// No server CA at all — should succeed (uses system CAs)
+	tlsCfg, err := BuildClientTLSConfig("", "", "", false, types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig error: %v", err)
+	}
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil TLS config")
+	}
+	if tlsCfg.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify=false")
+	}
+}
+
+func TestBuildClientTLSConfigInsecureSkipVerify(t *testing.T) {
+	_ = t.TempDir()
+	tlsCfg, err := BuildClientTLSConfig("", "", "", true, types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig error: %v", err)
+	}
+	if !tlsCfg.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify=true")
+	}
+}
+
+func TestBuildClientTLSConfigPartialClientCerts(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	clientCert, _ := generateSigned(t, dir, "client", caCert, caKey)
+
+	// Only cert, no key — should succeed but not load the cert
+	tlsCfg, err := BuildClientTLSConfig(clientCert, "", caCert, false, types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig error: %v", err)
+	}
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil TLS config")
+	}
+	if len(tlsCfg.Certificates) != 0 {
+		t.Errorf("expected 0 client certificates (key missing), got %d", len(tlsCfg.Certificates))
+	}
+}
+
+func TestBuildClientTLSConfigPartialClientCertsKeyOnly(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	_, clientKey := generateSigned(t, dir, "client", caCert, caKey)
+
+	// Only key, no cert — should succeed but not load the cert
+	tlsCfg, err := BuildClientTLSConfig("", clientKey, caCert, false, types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig error: %v", err)
+	}
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil TLS config")
+	}
+	if len(tlsCfg.Certificates) != 0 {
+		t.Errorf("expected 0 client certificates (cert missing), got %d", len(tlsCfg.Certificates))
 	}
 }
 
