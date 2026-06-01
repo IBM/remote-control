@@ -165,6 +165,50 @@ func Dial(ctx context.Context, wsURL string, tlsConfig *tls.Config, config *WebS
 	return p, nil
 }
 
+// DialWithFallback tries to dial a WebSocket connection on each URL until one
+// succeeds.  Returns the first successful *WebSocketPipe, or an error wrapping
+// the last dial failure if all URLs fail.
+func DialWithFallback(ctx context.Context, urls []string, tlsConfig *tls.Config, config *WebSocketConfig) (*WebSocketPipe, error) {
+	var lastErr error
+	for _, wsURL := range urls {
+		conn, _, err := (&websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+			TLSClientConfig:  tlsConfig,
+		}).DialContext(ctx, wsURL, nil)
+		if err != nil {
+			lastErr = err
+			ch.Log(alog.DEBUG, "WebSocket dial failed for %s: %v", wsURL, err)
+			continue
+		}
+		p := NewPipe(conn)
+		p.connected.Store(true)
+
+		p.reconnectURL = wsURL
+		p.tlsConfig = tlsConfig
+		p.messageQueue = make([][]byte, 0, config.MaxQueueLength)
+
+		if config.ReconnectInterval > 0 {
+			p.reconnectInterval = config.ReconnectInterval
+		} else {
+			p.reconnectInterval = 5 * time.Second
+		}
+		if config.ReconnectTimeout > 0 {
+			p.reconnectTimeout = config.ReconnectTimeout
+		} else {
+			p.reconnectTimeout = 10 * time.Second
+		}
+		if config.MaxQueueLength > 0 {
+			p.maxQueueLength = config.MaxQueueLength
+		} else {
+			p.maxQueueLength = 100
+		}
+
+		ch.Log(alog.DEBUG, "WebSocket connected to %s", wsURL)
+		return p, nil
+	}
+	return nil, fmt.Errorf("all server URLs (%d) failed: %w", len(urls), lastErr)
+}
+
 // OnMessage sets the handler called for every incoming WSMessage.
 func (p *WebSocketPipe) OnMessage(h MessageHandler) {
 	p.mu.Lock()

@@ -220,27 +220,29 @@ func (c *Client) initWebSocket(ctx context.Context, sessionID string) {
 		return
 	}
 
-	// Derive WebSocket URL from ServerURL
-	wsURL := ws.DeriveWebSocketURL(c.cfg.ServerURL)
-	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
+	// Derive WebSocket URLs from all server URLs
+	wsURLs := make([]string, 0, len(c.cfg.ServerURLs))
+	for _, serverURL := range c.cfg.ServerURLs {
+		wsURLs = append(wsURLs, ws.DeriveWebSocketURL(serverURL))
+	}
+	ch.Log(alog.DEBUG, "[remote-control] WebSocket URLs: %v (session: %s)", wsURLs, sessionID)
 
 	// Build WebSocket config
 	wsConfig := buildWebSocketConfig(c.cfg)
 
-	// Create WebSocket connection
-	c.wsClient = NewWebSocketConnection(wsURL, c.api.TLSConfig, c.clientID, sessionID, wsConfig)
+	// Create WebSocket connection with fallback across server URLs
+	var err error
+	c.wsClient, err = NewWebSocketConnectionWithFallback(wsURLs, c.clientID, sessionID, c.api.TLSConfig, wsConfig)
+	if err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
+		c.wsClient = nil
+		return
+	}
 
 	// Render output when received on websocket
 	c.wsClient.OnOutput(func(chunk types.OutputChunk) {
 		renderChunk(chunk)
 	})
-
-	// Attempt to connect
-	err := c.wsClient.Connect(ctx)
-	if err != nil {
-		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
-		c.wsClient = nil
-	}
 }
 
 func (c *Client) closeWebSocket() {

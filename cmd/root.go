@@ -16,11 +16,12 @@ import (
 var chCli = alog.UseChannel("CLI")
 
 var (
-	flagServer     string
-	flagClientCert string
-	flagClientKey  string
-	flagClientCA   string
-	flagCExpr      string
+	flagServer       string
+	flagServerURLs   string
+	flagClientCert   string
+	flagClientKey    string
+	flagClientCA     string
+	flagCExpr        string
 )
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
@@ -37,12 +38,13 @@ var knownSubcommands = map[string]bool{
 // knownRCFlagValues are RC flags that consume the next argument as their value.
 // Used when scanning os.Args to find the wrapped command boundary.
 var knownRCFlagValues = map[string]bool{
-	"--server":      true,
-	"--client-cert": true,
-	"--client-key":  true,
-	"--client-ca":   true,
-	"-c":            true,
-	"--c":           true,
+	"--server":               true,
+	"--server-urls":          true,
+	"--client-cert":          true,
+	"--client-key":           true,
+	"--client-ca":            true,
+	"-c":                     true,
+	"--c":                    true,
 }
 
 var rootCmd = &cobra.Command{
@@ -86,6 +88,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagServer, "server", "", "Remote control server URL")
+	rootCmd.PersistentFlags().StringVar(&flagServerURLs, "server-urls", "", "Comma-separated list of remote control server URLs")
 	rootCmd.PersistentFlags().StringVar(&flagClientCert, "client-cert", "", "Client TLS certificate file")
 	rootCmd.PersistentFlags().StringVar(&flagClientKey, "client-key", "", "Client TLS key file")
 	rootCmd.PersistentFlags().StringVar(&flagClientCA, "client-ca", "", "CA cert file to trust for server certificate")
@@ -167,7 +170,9 @@ func findWrappedCommandFromOSArgs(rawArgs []string) []string {
 // cliOverrides builds a map of CLI-specified overrides for config loading.
 func cliOverrides() map[string]string {
 	overrides := make(map[string]string)
-	if flagServer != "" {
+	if flagServerURLs != "" {
+		overrides["server-urls"] = flagServerURLs
+	} else if flagServer != "" {
 		overrides["server"] = flagServer
 	}
 	if flagClientCert != "" {
