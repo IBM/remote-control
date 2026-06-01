@@ -294,8 +294,8 @@ func TestBuildClientTLSConfigInsecureSkipVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildClientTLSConfig error: %v", err)
 	}
-	if !tlsCfg.InsecureSkipVerify {
-		t.Error("expected InsecureSkipVerify=true")
+	if tlsCfg.VerifyPeerCertificate == nil {
+		t.Error("expected VerifyPeerCertificate to be set when insecureSkipVerify=true")
 	}
 }
 

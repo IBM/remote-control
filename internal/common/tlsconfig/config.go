@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
 	"github.com/gabe-l-hart/remote-control/internal/common/types"
@@ -76,9 +77,12 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, in
 	rootCAs := loadCertPoolOrSystem(serverCAFile)
 
 	config := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		RootCAs:            rootCAs,
-		InsecureSkipVerify: insecureSkipVerify,
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    rootCAs,
+	}
+
+	if insecureSkipVerify {
+		config.VerifyPeerCertificate = verifyPeerCertificateNoHostname(rootCAs)
 	}
 
 	// Only load client cert when both cert AND key are present
@@ -130,4 +134,41 @@ func loadCertPoolOrSystem(caFile string) *x509.CertPool {
 		return systemPool
 	}
 	return pool
+}
+
+// verifyPeerCertificateNoHostname returns a VerifyPeerCertificate function
+// that performs full TLS certificate verification (chain, expiry, key usage)
+// but skips hostname verification.
+func verifyPeerCertificateNoHostname(rootCAs *x509.CertPool) func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("no certificates received from server")
+		}
+
+		certs := make([]*x509.Certificate, 0, len(rawCerts))
+		for _, der := range rawCerts {
+			cert, err := x509.ParseCertificate(der)
+			if err != nil {
+				return fmt.Errorf("parse certificate: %w", err)
+			}
+			certs = append(certs, cert)
+		}
+
+		leaf := certs[0]
+		intermediates := x509.NewCertPool()
+		for _, cert := range certs[1:] {
+			intermediates.AddCert(cert)
+		}
+
+		_, err := leaf.Verify(x509.VerifyOptions{
+			Roots:         rootCAs,
+			Intermediates: intermediates,
+			CurrentTime:   time.Now(),
+		})
+		if err != nil {
+			return fmt.Errorf("certificate verification failed: %w", err)
+		}
+
+		return nil
+	}
 }
