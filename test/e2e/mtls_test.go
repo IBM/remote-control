@@ -74,7 +74,7 @@ func TestMTLSClientWithValidCert(t *testing.T) {
 		t.Fatalf("generate client cert: %v", err)
 	}
 
-	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile, types.AuthModeMTLS)
+	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile, false, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("build client TLS: %v", err)
 	}

@@ -44,6 +44,7 @@ func buildHTTPClient(cfg *config.Config) (*http.Client, *tls.Config) {
 		cfg.ClientTLS.CertFile,
 		cfg.ClientTLS.KeyFile,
 		cfg.ClientTLS.TrustedCAFile,
+		cfg.ClientTLS.InsecureSkipVerify,
 		cfg.Auth.Mode,
 	)
 	timeout := time.Duration(cfg.ClientTimeoutSeconds) * time.Second

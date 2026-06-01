@@ -49,10 +49,11 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 }
 
 // BuildClientTLSConfig constructs the TLS configuration for clients (host wrapper, connect).
-// clientCertFile/clientKeyFile: this client's identity certificate and key.
-// serverCAFile: CA certificate to trust when verifying the server certificate.
+// clientCertFile/clientKeyFile: this client's identity certificate and key (both optional).
+// serverCAFile: CA certificate to trust when verifying the server certificate (optional, falls back to system CAs).
+// insecureSkipVerify: if true, skips hostname verification (not verified by default).
 // authMode: determines whether client certificates are sent (mtls) or not (proxy/none).
-func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, authMode types.AuthMode) (*tls.Config, error) {
+func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, insecureSkipVerify bool, authMode types.AuthMode) (*tls.Config, error) {
 	switch authMode {
 	// If no auth, no TLS
 	case types.AuthModeNone:
@@ -79,8 +80,9 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, au
 	}
 
 	config := &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		RootCAs:    serverCA,
+		MinVersion:         tls.VersionTLS13,
+		RootCAs:            rootCAs,
+		InsecureSkipVerify: insecureSkipVerify,
 	}
 
 	// Only load client cert in mTLS mode

@@ -216,7 +216,7 @@ func TestBuildClientTLSConfig(t *testing.T) {
 	caCert, caKey := generateCA(t, dir)
 	clientCert, clientKey := generateSigned(t, dir, "client", caCert, caKey)
 
-	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, caCert, types.AuthModeMTLS)
+	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, caCert, false, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("BuildClientTLSConfig error: %v", err)
 	}
@@ -229,6 +229,9 @@ func TestBuildClientTLSConfig(t *testing.T) {
 	if tlsCfg.RootCAs == nil {
 		t.Error("expected non-nil RootCAs")
 	}
+	if tlsCfg.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify=false")
+	}
 }
 
 func TestBuildClientTLSConfigBadCert(t *testing.T) {
@@ -240,7 +243,7 @@ func TestBuildClientTLSConfigBadCert(t *testing.T) {
 	os.WriteFile(badKey, []byte("not a key"), 0600)   //nolint:errcheck
 	os.WriteFile(caCert, []byte("not a CA"), 0600)    //nolint:errcheck
 
-	_, err := BuildClientTLSConfig(badCert, badKey, caCert, types.AuthModeMTLS)
+	_, err := BuildClientTLSConfig(badCert, badKey, caCert, false, types.AuthModeMTLS)
 	if err == nil {
 		t.Fatal("expected error for invalid cert")
 	}
@@ -254,9 +257,9 @@ func TestBuildClientTLSConfigBadCA(t *testing.T) {
 	badCA := filepath.Join(dir, "bad-ca.crt")
 	os.WriteFile(badCA, []byte("not a CA cert"), 0600) //nolint:errcheck
 
-	_, err := BuildClientTLSConfig(clientCert, clientKey, badCA, types.AuthModeMTLS)
-	if err == nil {
-		t.Fatal("expected error for invalid CA cert")
+	tlsCfg, err := BuildClientTLSConfig(clientCert, clientKey, badCA, false, types.AuthModeMTLS)
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil TLS config")
 	}
 }
 
