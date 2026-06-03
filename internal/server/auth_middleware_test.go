@@ -240,7 +240,6 @@ func TestAuthContextMiddlewareIntegration(t *testing.T) {
 			name:       "none mode allows all",
 			authMode:   types.AuthModeNone,
 			wantStatus: http.StatusOK,
-			wantAuth:   true,
 		},
 		{
 			name:     "proxy mode with valid header",
@@ -256,7 +255,6 @@ func TestAuthContextMiddlewareIntegration(t *testing.T) {
 				},
 			},
 			wantStatus: http.StatusOK,
-			wantAuth:   true,
 		},
 		{
 			name:     "proxy mode without header fails",
@@ -267,7 +265,6 @@ func TestAuthContextMiddlewareIntegration(t *testing.T) {
 				},
 			},
 			wantStatus: http.StatusUnauthorized,
-			wantAuth:   false,
 		},
 		{
 			name:     "proxy mode with invalid identity fails",
@@ -283,7 +280,11 @@ func TestAuthContextMiddlewareIntegration(t *testing.T) {
 				},
 			},
 			wantStatus: http.StatusUnauthorized,
-			wantAuth:   false,
+		},
+		{
+			name:       "mTLS mode w/out TLS",
+			authMode:   types.AuthModeMTLS,
+			wantStatus: http.StatusUnauthorized,
 		},
 	}
 
