@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,5 +333,14 @@ func Verify(cfg *Config) error {
 		// NOTE: Different sets of credentials will be required by different
 		// entrypoints, so validating which are required falls to the entrypoint
 	}
+
+	// Make sure auth mode and server URL scheme match
+	if u, err := url.Parse(cfg.ServerURL); nil != err {
+		return err
+	} else if (u.Scheme == "http" && cfg.Auth.Mode == types.AuthModeMTLS) ||
+		(u.Scheme == "https" && cfg.Auth.Mode != types.AuthModeMTLS) {
+		return fmt.Errorf("MISCONFIGURATION: Scheme mismatch between ServerURL [%s] / Auth.Mode [%s]", cfg.ServerURL, cfg.Auth.Mode)
+	}
+
 	return nil
 }

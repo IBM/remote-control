@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,7 +39,7 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
-	serverCmd.Flags().StringVar(&serverAddr, "addr", ":8443", "Address to listen on")
+	serverCmd.Flags().StringVar(&serverAddr, "addr", "", "Address override to listen on")
 	serverCmd.Flags().StringVar(&authMode, "auth-mode", "", "Authentication mode: mtls, proxy, none")
 	serverCmd.Flags().StringVar(&authProxyIdentityHeader, "auth-proxy-identity-header", "", "Identity header name for proxy auth")
 	serverCmd.Flags().BoolVar(&authProxyRequireTLS, "auth-proxy-require-tls", false, "Require TLS for proxy auth")
@@ -58,6 +60,44 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 	if authProxyRequireTLS {
 		cfg.Auth.Proxy.RequireTLS = authProxyRequireTLS
+	}
+
+	// Parse serverAddr from config w/ overrides
+	if serverAddr == "" {
+		if u, err := url.Parse(cfg.ServerURL); nil != err {
+			ch.Log(alog.ERROR, "Failed to parse server URL from config value [%s]: %v", cfg.ServerURL, err)
+			return err
+		} else {
+			serverAddr = u.Host
+			ch.Log(alog.DEBUG, "Using server address from config: %s", serverAddr)
+		}
+	} else {
+		if serverAddr[0] == ':' {
+			serverAddr = fmt.Sprintf("127.0.0.1%s", serverAddr)
+		}
+		if !(strings.HasPrefix(serverAddr, "http://") || strings.HasPrefix(serverAddr, "https://")) {
+			scheme := "http"
+			if cfg.Auth.Mode == types.AuthModeMTLS {
+				scheme = "https"
+			}
+			serverAddr = fmt.Sprintf("%s://%s", scheme, serverAddr)
+		}
+
+		if u, err := url.Parse(serverAddr); nil != err {
+			ch.Log(alog.ERROR, "Failed to parse serverAddr from flag [%s]: %v", serverAddr, err)
+			return err
+		} else {
+			if u.Scheme == "" {
+				if cfg.Auth.Mode == types.AuthModeMTLS {
+					u.Scheme = "https"
+				} else {
+					u.Scheme = "http"
+				}
+			}
+			cfg.ServerURL = u.String()
+			serverAddr = u.Host
+			ch.Log(alog.DEBUG, "Using server address from flag: %s. ServerURL: %s", serverAddr, cfg.ServerURL)
+		}
 	}
 
 	// Fully verify config before booting
