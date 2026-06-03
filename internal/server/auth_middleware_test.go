@@ -267,6 +267,21 @@ func TestAuthContextMiddlewareIntegration(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			name:     "proxy mode without header configured fails",
+			authMode: types.AuthModeProxy,
+			configModifiers: []func(*config.Config){
+				func(c *config.Config) {
+					c.Auth.Proxy.IdentityHeader = ""
+				},
+			},
+			reqModifiers: []func(*http.Request){
+				func(r *http.Request) {
+					r.Header.Set("X-Authenticated-User", "test-user")
+				},
+			},
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
 			name:     "proxy mode with invalid identity fails",
 			authMode: types.AuthModeProxy,
 			configModifiers: []func(*config.Config){

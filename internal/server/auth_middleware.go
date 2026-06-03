@@ -110,7 +110,10 @@ func extractProxyIdentity(r *http.Request, cfg *config.Config) *types.AuthContex
 
 	// Extract identity from header if configured
 	clientID := ""
-	if cfg.Auth.Proxy.IdentityHeader != "" {
+	if cfg.Auth.Proxy.IdentityHeader == "" {
+		authCh.Log(alog.ERROR, "MISCONFIGURATION: Proxy auth mode set without an Identity Header")
+		return &types.AuthContext{Mode: types.AuthModeProxy, Verified: false}
+	} else {
 		clientID = r.Header.Get(cfg.Auth.Proxy.IdentityHeader)
 		if clientID == "" {
 			authCh.Log(alog.DEBUG, "Identity header missing: %s", cfg.Auth.Proxy.IdentityHeader)
