@@ -64,11 +64,26 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Parse serverAddr from config w/ overrides
 	if serverAddr == "" {
-		if u, err := url.Parse(cfg.ServerURL); nil != err {
-			ch.Log(alog.ERROR, "Failed to parse server URL from config value [%s]: %v", cfg.ServerURL, err)
-			return err
-		} else {
-			serverAddr = u.Host
+		for idx, serverUrl := range cfg.ServerURLs {
+			port := ""
+			if u, err := url.Parse(serverUrl); nil != err {
+				ch.Log(alog.ERROR, "Failed to parse address from server URL config value %d [%s]: %v", idx, serverUrl, err)
+				return err
+			} else {
+				if port != "" && u.Port() != port {
+					err := fmt.Errorf("Multiple ports found across server URLs: [%s, %s, ...]", port, u.Port())
+					ch.Log(alog.ERROR, "%v", err)
+					return err
+				}
+				port = u.Port()
+				ch.Log(alog.DEBUG, "Using server address from config: %s", serverAddr)
+			}
+			if port == "" {
+				err := fmt.Errorf("Unable to extract port from config server URLs")
+				ch.Log(alog.ERROR, "%v", err)
+				return err
+			}
+			serverAddr = fmt.Sprintf(":%s", port)
 			ch.Log(alog.DEBUG, "Using server address from config: %s", serverAddr)
 		}
 	} else {
@@ -94,9 +109,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 					u.Scheme = "http"
 				}
 			}
-			cfg.ServerURL = u.String()
+			cfg.ServerURLs = []string{u.String()}
 			serverAddr = u.Host
-			ch.Log(alog.DEBUG, "Using server address from flag: %s. ServerURL: %s", serverAddr, cfg.ServerURL)
+			ch.Log(alog.DEBUG, "Using server address from flag: %s. ServerURLs: %v", serverAddr, cfg.ServerURLs)
 		}
 	}
 
