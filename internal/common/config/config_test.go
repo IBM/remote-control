@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gabe-l-hart/remote-control/internal/common/types"
 	testmain "github.com/gabe-l-hart/remote-control/test"
 )
 
@@ -207,6 +208,9 @@ func TestSaveAndLoad(t *testing.T) {
 			DefaultLevel: "info",
 			Json:         false,
 		},
+		Auth: AuthConfig{
+			Mode: types.AuthModeNone,
+		},
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save error: %v", err)
@@ -384,5 +388,28 @@ func TestConfigPrecedenceDefaultToFileToEnvToCli(t *testing.T) {
 	}
 	if cfg.EnableWebSocket {
 		t.Error("expected EnableWebSocket=false from config file")
+	}
+}
+
+func TestConfigVerify(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      Config
+		expectError bool
+	}{
+		{
+			name:        "valid defaults",
+			config:      *Defaults(),
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		err := Verify(&tt.config)
+		if tt.expectError && nil == err {
+			t.Errorf("[%s] Expected error, but Verify passed", tt.name)
+		} else if !tt.expectError && nil != err {
+			t.Errorf("[%s] Expected Verify to pass; got error: %v", tt.name, err)
+		}
 	}
 }

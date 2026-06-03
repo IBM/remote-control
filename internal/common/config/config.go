@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
+	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
 	"github.com/gabe-l-hart/remote-control/internal/common/types"
 )
 
@@ -288,6 +289,11 @@ func Load(cliOverrides map[string]string) (*Config, error) {
 		return nil, err
 	}
 
+	// Run common verification
+	if err := Verify(cfg); nil != err {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
@@ -302,4 +308,29 @@ func Save(cfg *Config) error {
 	}
 	path := filepath.Join(cfg.ConfigDir, "config.json")
 	return os.WriteFile(path, data, 0600)
+}
+
+// Verify valid values for all config
+func Verify(cfg *Config) error {
+	// Verify Auth Modes
+	if cfg.Auth.Mode != types.AuthModeMTLS &&
+		cfg.Auth.Mode != types.AuthModeProxy &&
+		cfg.Auth.Mode != types.AuthModeNone {
+		return fmt.Errorf("Invalid auth mode type: %s", cfg.Auth.Mode)
+	} else if cfg.Auth.Mode == types.AuthModeProxy && cfg.Auth.Proxy.IdentityHeader == "" {
+		return fmt.Errorf("MISCONFIGURATION: Auth mode proxy set without identity header")
+	} else if cfg.Auth.Mode == types.AuthModeMTLS {
+		if err := tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile); nil != err {
+			return err
+		}
+		if err := tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile); nil != err {
+			return err
+		}
+		if err := tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile); nil != err {
+			return err
+		}
+		// NOTE: Different sets of credentials will be required by different
+		// entrypoints, so validating which are required falls to the entrypoint
+	}
+	return nil
 }

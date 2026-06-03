@@ -51,9 +51,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Configure auth mode
 	if authMode != "" {
-		if authMode != "mtls" && authMode != "proxy" && authMode != "none" {
-			return fmt.Errorf("invalid auth mode: %s", authMode)
-		}
 		cfg.Auth.Mode = types.AuthMode(authMode)
 	}
 	if authProxyIdentityHeader != "" {
@@ -63,15 +60,15 @@ func runServer(cmd *cobra.Command, args []string) error {
 		cfg.Auth.Proxy.RequireTLS = authProxyRequireTLS
 	}
 
+	// Fully verify config before booting
+	// NOTE: Config may not be modified after this point!
+	if err := config.Verify(cfg); nil != err {
+		ch.Log(alog.ERROR, "Config verification error: %v", err)
+		return err
+	}
+
 	// Log authentication mode
 	ch.Log(alog.INFO, "[remote-control] Authentication mode: %s", cfg.Auth.Mode)
-
-	// Warn on expiring certs (only in mTLS mode)
-	if cfg.Auth.Mode == types.AuthModeMTLS {
-		tlsconfig.CheckCertExpiry("server cert", cfg.ServerTLS.CertFile)
-		tlsconfig.CheckCertExpiry("server CA", cfg.ServerTLS.TrustedCAFile)
-		tlsconfig.CheckCertExpiry("client CA", cfg.ClientTLS.TrustedCAFile)
-	}
 
 	srv := server.NewServer(serverAddr, cfg)
 	ch.Log(alog.INFO, "[remote-control] server listening on %s", serverAddr)

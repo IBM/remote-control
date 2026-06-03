@@ -12,25 +12,29 @@ var ch = alog.UseChannel("CLIENT")
 
 const certExpiryWarnThreshold = 30 * 24 * time.Hour
 
-// CheckCertExpiry logs a warning if a certificate file will expire within 30 days.
-// It silently returns if the file doesn't exist or isn't a certificate.
-func CheckCertExpiry(label, certFile string) {
+// CheckCertExpiry logs a warning if a certificate file will expire within 30
+// days. Returns an error if cert is already expired. It silently returns if the
+// file doesn't exist or isn't a certificate.
+func CheckCertExpiry(label, certFile string) error {
 	if certFile == "" {
-		return
+		return nil
 	}
 	if _, err := os.Stat(certFile); err != nil {
-		return
+		return nil
 	}
 	expiry, err := CertExpiry(certFile)
 	if err != nil {
-		return
+		return nil
 	}
 	until := time.Until(expiry)
 	if until <= 0 {
-		ch.Log(alog.WARNING, "[remote-control] WARNING: %s has EXPIRED (%s)", label, certFile)
+		err := fmt.Errorf("ERROR: %s has EXPIRED (%s)", label, certFile)
+		ch.Log(alog.ERROR, "[remote-control] %v", err)
+		return err
 	} else if until < certExpiryWarnThreshold {
 		ch.Log(alog.WARNING, "[remote-control] WARNING: %s expires in %s (%s)", label, formatDuration(until), certFile)
 	}
+	return nil
 }
 
 func formatDuration(d time.Duration) string {
