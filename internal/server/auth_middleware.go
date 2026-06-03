@@ -22,16 +22,11 @@ func authMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 
 			switch cfg.Auth.Mode {
 			case types.AuthModeMTLS:
-				// If no TLS is configured (r.TLS == nil), allow the request through
-				// This supports tests and setups where TLS is not yet configured
+				// If no TLS is configured error and warn that initialization is needed
 				if r.TLS == nil {
-					authCh.Log(alog.WARNING, "mTLS mode configured but TLS not active; allowing anonymous access")
-					authCtx = &types.AuthContext{
-						Mode:     types.AuthModeMTLS,
-						ClientID: "anonymous",
-						Verified: true,
-						Source:   "none",
-					}
+					authCh.Log(alog.ERROR, "MISCONFIGURATION: mTLS mode set but TLS not configured; run `remote-control init`")
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
 				} else {
 					authCtx = extractMTLSIdentity(r)
 					if !authCtx.Verified {
@@ -115,7 +110,10 @@ func extractProxyIdentity(r *http.Request, cfg *config.Config) *types.AuthContex
 
 	// Extract identity from header if configured
 	clientID := ""
-	if cfg.Auth.Proxy.IdentityHeader != "" {
+	if cfg.Auth.Proxy.IdentityHeader == "" {
+		authCh.Log(alog.ERROR, "MISCONFIGURATION: Proxy auth mode set without an Identity Header")
+		return &types.AuthContext{Mode: types.AuthModeProxy, Verified: false}
+	} else {
 		clientID = r.Header.Get(cfg.Auth.Proxy.IdentityHeader)
 		if clientID == "" {
 			authCh.Log(alog.DEBUG, "Identity header missing: %s", cfg.Auth.Proxy.IdentityHeader)
