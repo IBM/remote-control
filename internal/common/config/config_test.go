@@ -39,9 +39,6 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL() != "https://localhost:8443" {
-		t.Errorf("expected default server URL, got %s", cfg.ServerURL())
-	}
 	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "https://localhost:8443" {
 		t.Errorf("expected ServerURLs to have one default URL, got %v", cfg.ServerURLs)
 	}
@@ -71,14 +68,15 @@ func TestLoadWithServerURLEnvOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL() != "http://test-server:9090" {
-		t.Errorf("expected env override URL, got %s", cfg.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "http://test-server:9090" {
+		t.Errorf("expected env override URL, got %v", cfg.ServerURLs)
 	}
 }
 
 func TestLoadWithServerURLSEnvOverride(t *testing.T) {
 	cleanEnv(t, t.TempDir())
 	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://url1:8080, http://url2:9090,http://url3:7070")
+	t.Setenv("REMOTE_CONTROL_AUTH_MODE", "none")
 
 	cfg, err := Load(nil)
 	if err != nil {
@@ -102,6 +100,7 @@ func TestLoadWithServerURLSEnvTakesPriorityOverServerURL(t *testing.T) {
 	cleanEnv(t, t.TempDir())
 	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://single:8080")
 	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://multi1:8080,http://multi2:9090")
+	t.Setenv("REMOTE_CONTROL_AUTH_MODE", "none")
 
 	cfg, err := Load(nil)
 	if err != nil {
@@ -149,8 +148,8 @@ func TestLoadWithCLIOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL() != "http://cli-server:8080" {
-		t.Errorf("expected CLI override URL, got %s", cfg.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "http://cli-server:8080" {
+		t.Errorf("expected CLI override URL, got %v", cfg.ServerURLs)
 	}
 }
 
@@ -159,6 +158,7 @@ func TestLoadWithCLIServerURLsOverride(t *testing.T) {
 
 	cfg, err := Load(map[string]string{
 		"server-urls": "http://c1:8080,http://c2:9090",
+		"auth-mode":   "none",
 	})
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
@@ -178,6 +178,7 @@ func TestCLIServerURLsTakePriorityOverServerURL(t *testing.T) {
 	cleanEnv(t, t.TempDir())
 	t.Setenv("REMOTE_CONTROL_SERVER_URLS", "http://env-multi1:8080,http://env-multi2:9090")
 	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://env-single:7070")
+	t.Setenv("REMOTE_CONTROL_AUTH_MODE", "none")
 
 	cfg, err := Load(map[string]string{
 		"server-urls": "http://cli-multi1:8080,http://cli-multi2:9090",
@@ -204,8 +205,8 @@ func TestCLIOverridesTakePriorityOverEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL() != "http://cli-server:8080" {
-		t.Errorf("expected CLI server to win over env, got %s", cfg.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "http://cli-server:8080" {
+		t.Errorf("expected CLI server to win over env, got %v", cfg.ServerURLs)
 	}
 }
 
@@ -249,8 +250,8 @@ func TestLoadWithConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.ServerURL() != "http://file-server:7777" {
-		t.Errorf("expected file server URL, got %s", cfg.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "http://file-server:7777" {
+		t.Errorf("expected file server URL, got %v", cfg.ServerURLs)
 	}
 	if cfg.RequireApproval {
 		t.Error("expected RequireApproval=false from file")
@@ -263,6 +264,7 @@ func TestLoadWithConfigFileMultipleURLs(t *testing.T) {
 
 	fileCfg := map[string]any{
 		"server_urls":      []string{"http://url1:8080", "http://url2:9090"},
+		"auth":             map[string]any{"mode": "none"},
 		"require_approval": false,
 	}
 	data, _ := json.MarshalIndent(fileCfg, "", "  ")
@@ -299,8 +301,8 @@ func TestEnvOverridesTakePriorityOverConfigFile(t *testing.T) {
 		t.Fatalf("Load error: %v", err)
 	}
 	// Env wins over file.
-	if cfg.ServerURL() != "http://env-server:9090" {
-		t.Errorf("expected env server to win over file, got %s", cfg.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "http://env-server:9090" {
+		t.Errorf("expected env server to win over file, got %v", cfg.ServerURLs)
 	}
 }
 
@@ -336,8 +338,8 @@ func TestSaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if loaded.ServerURL() != "https://my-server:8443" {
-		t.Errorf("expected saved URL, got %s", loaded.ServerURL())
+	if len(cfg.ServerURLs) != 1 || cfg.ServerURLs[0] != "https://my-server:8443" {
+		t.Errorf("expected saved URL, got %v", loaded.ServerURLs)
 	}
 	if loaded.RequireApproval {
 		t.Error("expected RequireApproval=false after load")
@@ -357,6 +359,7 @@ func TestSaveMultipleURLs(t *testing.T) {
 		ConfigDir:  dir,
 		ServerURLs: []string{"http://url1:8080", "http://url2:9090"},
 		Log:        LoggingConfig{DefaultLevel: "info"},
+		Auth:       AuthConfig{Mode: types.AuthModeNone},
 	}
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save error: %v", err)
