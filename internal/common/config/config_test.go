@@ -60,6 +60,7 @@ func TestDefaults(t *testing.T) {
 func TestLoadWithServerURLEnvOverride(t *testing.T) {
 	cleanEnv(t, t.TempDir())
 	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://test-server:9090")
+	t.Setenv("REMOTE_CONTROL_AUTH_MODE", "none")
 
 	cfg, err := Load(nil)
 	if err != nil {
@@ -101,7 +102,8 @@ func TestLoadWithCLIOverride(t *testing.T) {
 	cleanEnv(t, t.TempDir())
 
 	cfg, err := Load(map[string]string{
-		"server": "http://cli-server:8080",
+		"server":    "http://cli-server:8080",
+		"auth-mode": "none",
 	})
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
@@ -116,7 +118,8 @@ func TestCLIOverridesTakePriorityOverEnv(t *testing.T) {
 	t.Setenv("REMOTE_CONTROL_SERVER_URL", "http://env-server:9090")
 
 	cfg, err := Load(map[string]string{
-		"server": "http://cli-server:8080",
+		"server":    "http://cli-server:8080",
+		"auth-mode": "none",
 	})
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
@@ -154,6 +157,7 @@ func TestLoadWithConfigFile(t *testing.T) {
 
 	fileCfg := map[string]any{
 		"server_url":       "http://file-server:7777",
+		"auth":             map[string]any{"mode": "none"},
 		"require_approval": false,
 	}
 	data, _ := json.MarshalIndent(fileCfg, "", "  ")
@@ -178,7 +182,10 @@ func TestEnvOverridesTakePriorityOverConfigFile(t *testing.T) {
 	cleanEnv(t, dir)
 
 	// Config file sets one URL.
-	fileCfg := map[string]any{"server_url": "http://file-server:7777"}
+	fileCfg := map[string]any{
+		"server_url": "http://file-server:7777",
+		"auth":       map[string]any{"mode": "none"},
+	}
 	data, _ := json.MarshalIndent(fileCfg, "", "  ")
 	os.WriteFile(filepath.Join(dir, "config.json"), data, 0600) //nolint:errcheck
 
@@ -209,7 +216,7 @@ func TestSaveAndLoad(t *testing.T) {
 			Json:         false,
 		},
 		Auth: AuthConfig{
-			Mode: types.AuthModeNone,
+			Mode: types.AuthModeMTLS,
 		},
 	}
 	if err := Save(cfg); err != nil {
