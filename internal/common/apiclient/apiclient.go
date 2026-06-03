@@ -19,7 +19,6 @@ var ch = alog.UseChannel("APICLIENT")
 
 // APIClient is an HTTP client for the remote-control server API.
 type APIClient struct {
-	BaseURL    string
 	ServerURLs []string
 	TLSConfig  *tls.Config // Exported so websocket can share
 
@@ -31,7 +30,6 @@ type APIClient struct {
 func NewAPIClient(cfg *config.Config) *APIClient {
 	httpClient, tlsCfg := buildHTTPClient(cfg)
 	return &APIClient{
-		BaseURL:    cfg.ServerURL(),
 		ServerURLs: cfg.ServerURLs,
 		TLSConfig:  tlsCfg,
 		httpClient: httpClient,
