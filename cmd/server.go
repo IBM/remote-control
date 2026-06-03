@@ -104,6 +104,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if err := srv.ListenAndServeTLS(tlsCfg); err != nil && err != http.ErrServerClosed {
 			return err
 		}
+	} else if cfg.Auth.Mode == types.AuthModeMTLS {
+		err := fmt.Errorf("Auth mode set to mTLS, but no mTLS config available; Run `remote-control init`")
+		ch.Log(alog.ERROR, "[remote-control] %v", err)
+		return err
 	} else {
 		ch.Log(alog.INFO, "[remote-control] Serving Insecure on %s", serverAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
