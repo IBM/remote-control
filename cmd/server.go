@@ -154,7 +154,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("build TLS config: %w", err)
 		}
 	}
-	if nil != tlsCfg {
+	if nil != tlsCfg && cfg.Auth.Mode == types.AuthModeMTLS {
 		ch.Log(alog.INFO, "[remote-control] Serving TLS on %s", serverAddr)
 		if err := srv.ListenAndServeTLS(tlsCfg); err != nil && err != http.ErrServerClosed {
 			return err
