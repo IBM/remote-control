@@ -44,7 +44,7 @@ func NewWebSocketHost(url string, tlsConfig *tls.Config, sessionID, clientID str
 // NewWebSocketHostWithFallback creates a new WebSocketHost that tries multiple
 // server URLs when connecting.  Returns the host (with pipe set on first
 // successful dial) or an error if all URLs fail.
-func NewWebSocketHostWithFallback(wsURLs []string, serverURLs []string, tlsConfig *tls.Config, sessionID, clientID string, wsConfig *ws.WebSocketConfig) (*WebSocketHost, error) {
+func NewWebSocketHostWithFallback(ctx context.Context, wsURLs []string, serverURLs []string, tlsConfig *tls.Config, sessionID, clientID string, wsConfig *ws.WebSocketConfig) (*WebSocketHost, error) {
 	wh := &WebSocketHost{
 		sessionID: sessionID,
 		clientID:  clientID,
@@ -59,7 +59,7 @@ func NewWebSocketHostWithFallback(wsURLs []string, serverURLs []string, tlsConfi
 			wsURLWithPath += "?client_id=" + clientID
 		}
 
-		pipe, err := ws.DialWithFallback(context.Background(), []string{wsURLWithPath}, tlsConfig, wsConfig)
+		pipe, err := ws.DialWithFallback(ctx, []string{wsURLWithPath}, tlsConfig, wsConfig)
 		if err != nil {
 			lastErr = err
 			continue
@@ -72,6 +72,7 @@ func NewWebSocketHostWithFallback(wsURLs []string, serverURLs []string, tlsConfi
 		pipe.OnDisconnect(func() {
 			wsHostCh.Log(alog.DEBUG, "[remote-control] Host WebSocket disconnected")
 		})
+		pipe.Start(ctx)
 		return wh, nil
 	}
 	return nil, fmt.Errorf("failed to connect to any server URL (%d): %w", len(wsURLs), lastErr)

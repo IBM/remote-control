@@ -354,7 +354,7 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 
 	// Create WebSocket host connection with fallback across server URLs
 	var err error
-	h.wsHost, err = NewWebSocketHostWithFallback(wsURLs, h.cfg.ServerURLs, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
+	h.wsHost, err = NewWebSocketHostWithFallback(ctx, wsURLs, h.cfg.ServerURLs, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
 	if err != nil {
 		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
 		h.wsHost = nil

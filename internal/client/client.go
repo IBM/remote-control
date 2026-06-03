@@ -232,7 +232,7 @@ func (c *Client) initWebSocket(ctx context.Context, sessionID string) {
 
 	// Create WebSocket connection with fallback across server URLs
 	var err error
-	c.wsClient, err = NewWebSocketConnectionWithFallback(wsURLs, c.clientID, sessionID, c.api.TLSConfig, wsConfig)
+	c.wsClient, err = NewWebSocketConnectionWithFallback(ctx, wsURLs, c.clientID, sessionID, c.api.TLSConfig, wsConfig)
 	if err != nil {
 		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
 		c.wsClient = nil

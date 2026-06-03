@@ -44,7 +44,7 @@ func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, session
 // NewWebSocketConnectionWithFallback creates a new WebSocketConnection that tries
 // multiple server URLs when connecting.  Returns the connection (with pipe set on
 // first successful dial) or an error if all URLs fail.
-func NewWebSocketConnectionWithFallback(wsURLs []string, clientID, sessionID string, tlsConfig *tls.Config, wsConfig *ws.WebSocketConfig) (*WebSocketConnection, error) {
+func NewWebSocketConnectionWithFallback(ctx context.Context, wsURLs []string, clientID, sessionID string, tlsConfig *tls.Config, wsConfig *ws.WebSocketConfig) (*WebSocketConnection, error) {
 	c := &WebSocketConnection{
 		clientID:  clientID,
 		sessionID: sessionID,
@@ -56,7 +56,7 @@ func NewWebSocketConnectionWithFallback(wsURLs []string, clientID, sessionID str
 	for _, wsURL := range wsURLs {
 		wsURLWithPath := wsURL + "/ws/" + sessionID
 
-		pipe, err := ws.DialWithFallback(context.Background(), []string{wsURLWithPath}, tlsConfig, wsConfig)
+		pipe, err := ws.DialWithFallback(ctx, []string{wsURLWithPath}, tlsConfig, wsConfig)
 		if err != nil {
 			lastErr = err
 			continue
@@ -69,6 +69,8 @@ func NewWebSocketConnectionWithFallback(wsURLs []string, clientID, sessionID str
 		pipe.OnDisconnect(func() {
 			wsCh.Log(alog.DEBUG, "WebSocket disconnected")
 		})
+		pipe.Start(ctx)
+
 		return c, nil
 	}
 	return nil, fmt.Errorf("failed to connect to any server URL (%d): %w", len(wsURLs), lastErr)
