@@ -125,7 +125,7 @@ func TestHostOutputProxying(t *testing.T) {
 
 	go func() {
 		cmd := fmt.Sprintf(`printf '%s'; while ! [ -f %s ]; do sleep 0.05; done`, outputText, sentinelPath)
-		runErr <- h.Run(ctx, []string{"sh", "-c", cmd})
+		runErr <- h.Run(ctx, []string{"sh", "-c", cmd}, "")
 	}()
 
 	defer func() {
@@ -192,7 +192,7 @@ func TestHostStdinRouting(t *testing.T) {
 
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- h.Run(ctx, []string{"sh", "-c", `read x; echo "$x"; sleep 0.5`})
+		runErr <- h.Run(ctx, []string{"sh", "-c", `read x; echo "$x"; sleep 0.5`}, "")
 	}()
 
 	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
@@ -248,7 +248,7 @@ func TestHostCleanShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- h.Run(ctx, []string{"sleep", "60"})
+		runErr <- h.Run(ctx, []string{"sleep", "60"}, "")
 	}()
 
 	waitForAnySession(t, serverURL, 5*time.Second)
@@ -283,7 +283,7 @@ func TestHostSessionCompleted(t *testing.T) {
 	go func() {
 		// Wait for sentinel file before exiting to ensure session is detected
 		cmd := fmt.Sprintf(`while ! [ -f %s ]; do sleep 0.05; done; exit 42`, sentinelPath)
-		runErr <- h.Run(ctx, []string{"sh", "-c", cmd})
+		runErr <- h.Run(ctx, []string{"sh", "-c", cmd}, "")
 	}()
 
 	sessionID := waitForAnySession(t, serverURL, 5*time.Second)
