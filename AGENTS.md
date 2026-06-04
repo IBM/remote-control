@@ -14,7 +14,7 @@
 ```go
 import (
     ...
-	testmain "github.com/gabe-l-hart/remote-control/test"
+	testmain "github.com/IBM/remote-control/test"
     ...
 )
 ```

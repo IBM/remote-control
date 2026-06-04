@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/apiclient"
+	"github.com/IBM/remote-control/internal/common/types"
 )
 
 // syncWriter wraps an io.Writer with a mutex so concurrent writes are safe.

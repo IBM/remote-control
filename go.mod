@@ -1,4 +1,4 @@
-module github.com/gabe-l-hart/remote-control
+module github.com/IBM/remote-control
 
 go 1.24.0
 

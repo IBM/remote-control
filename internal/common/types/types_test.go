@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	testmain "github.com/gabe-l-hart/remote-control/test"
+	testmain "github.com/IBM/remote-control/test"
 )
 
 func TestMain(m *testing.M) {

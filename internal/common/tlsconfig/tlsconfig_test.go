@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	testmain "github.com/gabe-l-hart/remote-control/test"
+	"github.com/IBM/remote-control/internal/common/types"
+	testmain "github.com/IBM/remote-control/test"
 )
 
 func TestMain(m *testing.M) {

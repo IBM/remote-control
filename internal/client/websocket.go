@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
+	"github.com/IBM/remote-control/internal/common/types"
+	ws "github.com/IBM/remote-control/internal/common/websocket"
 )
 
 var wsCh = alog.UseChannel("WS_CLIENT")

@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/host"
-	"github.com/gabe-l-hart/remote-control/internal/server"
-	testmain "github.com/gabe-l-hart/remote-control/test"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/host"
+	"github.com/IBM/remote-control/internal/server"
+	testmain "github.com/IBM/remote-control/test"
 )
 
 func TestMain(m *testing.M) {

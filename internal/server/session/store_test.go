@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/common/config"
 	"github.com/gorilla/websocket"
 )
 

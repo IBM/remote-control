@@ -17,10 +17,10 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/apiclient"
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
+	"github.com/IBM/remote-control/internal/common/apiclient"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/common/types"
+	ws "github.com/IBM/remote-control/internal/common/websocket"
 )
 
 var ch = alog.UseChannel("HOST")

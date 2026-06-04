@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/types"
+	ws "github.com/IBM/remote-control/internal/common/websocket"
 	gowebsocket "github.com/gorilla/websocket"
 )
 
@@ -23,7 +23,13 @@ type serverConn struct {
 }
 
 func (s *serverConn) Store(c *gowebsocket.Conn) { s.v.Store(c) }
-func (s *serverConn) Load() *gowebsocket.Conn   { v := s.v.Load(); if v == nil { return nil }; return v.(*gowebsocket.Conn) }
+func (s *serverConn) Load() *gowebsocket.Conn {
+	v := s.v.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(*gowebsocket.Conn)
+}
 
 // startServerThatPushesMessages starts a WebSocket server. When a client
 // connects at /ws/{id}, the server stores the connection, waits briefly,
