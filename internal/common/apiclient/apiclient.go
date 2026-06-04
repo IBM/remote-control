@@ -138,8 +138,12 @@ func (c *APIClient) delete(path string) (*http.Response, error) {
 /* -- Public [host] --------------------------------------------------------- */
 
 // CreateSession creates a new session on the server and returns its ID.
-func (c *APIClient) CreateSession(command []string) (string, error) {
-	resp, err := c.post("/sessions", map[string]any{})
+func (c *APIClient) CreateSession(_ []string, name string) (string, error) {
+	body := map[string]any{}
+	if name != "" {
+		body["name"] = name
+	}
+	resp, err := c.post("/sessions", body)
 	if err != nil {
 		return "", err
 	}
