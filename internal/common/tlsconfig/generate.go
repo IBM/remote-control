@@ -56,10 +56,12 @@ func GenerateCACert(certOut, keyOut string) error {
 }
 
 // GenerateSignedCert creates a certificate signed by the given CA.
-// commonName is used as the certificate's CN and DNS SAN.
+// commonName is used as the certificate's CN and is always included in DNS SANs.
+// dnsNames is a list of additional DNS names; if empty, defaults to [commonName, "localhost"].
+// ipAddresses is a list of IP addresses; if empty, defaults to [127.0.0.1, ::1].
 // This is a pure signing utility: the CA files contain all signing state.
 // Future extension: replace the self-signing step with an ACME or Vault call.
-func GenerateSignedCert(commonName, certOut, keyOut, caCertFile, caKeyFile string) error {
+func GenerateSignedCert(commonName, certOut, keyOut, caCertFile, caKeyFile string, dnsNames []string, ipAddresses []string) error {
 	// Load CA cert.
 	caCertPEM, err := os.ReadFile(caCertFile)
 	if err != nil {
@@ -99,17 +101,42 @@ func GenerateSignedCert(commonName, certOut, keyOut, caCertFile, caKeyFile strin
 		return err
 	}
 
+	// Build DNS SANs: include commonName, add user-provided names, default to "localhost" if none given.
+	var allDNS []string
+	for _, name := range dnsNames {
+		if name != "" && !contains(allDNS, name) {
+			allDNS = append(allDNS, name)
+		}
+	}
+	if !contains(allDNS, commonName) {
+		allDNS = append(allDNS, commonName)
+	}
+	if !contains(allDNS, "localhost") {
+		allDNS = append(allDNS, "localhost")
+	}
+
+	// Build IP SANs: use user-provided IPs, default to loopback addresses if none given.
+	var allIPs []net.IP
+	for _, ipStr := range ipAddresses {
+		if ip := net.ParseIP(ipStr); ip != nil {
+			allIPs = append(allIPs, ip)
+		}
+	}
+	if len(allIPs) == 0 {
+		allIPs = []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	}
+
 	template := &x509.Certificate{
-		SerialNumber: serial,
+		SerialNumber:    serial,
 		Subject: pkix.Name{
 			Organization: []string{"remote-control"},
 			CommonName:   commonName,
 		},
-		DNSNames:  []string{commonName, "localhost"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		NotBefore: time.Now().Add(-time.Minute),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		DNSNames:      allDNS,
+		IPAddresses:   allIPs,
+		NotBefore:     time.Now().Add(-time.Minute),
+		NotAfter:      time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:      x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{
 			x509.ExtKeyUsageServerAuth,
 			x509.ExtKeyUsageClientAuth,
@@ -174,3 +201,12 @@ type pemError struct{ file string }
 
 func (e *pemError) Error() string { return "invalid PEM data in " + e.file }
 func errInvalidPEM(file string) error { return &pemError{file} }
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}

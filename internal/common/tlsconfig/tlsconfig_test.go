@@ -1,6 +1,7 @@
 package tlsconfig
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,9 +29,15 @@ func generateCA(t *testing.T, dir string) (certFile, keyFile string) {
 // generateSigned creates a CA-signed cert+key in dir.
 func generateSigned(t *testing.T, dir, cn, caCert, caKey string) (certFile, keyFile string) {
 	t.Helper()
+	return generateSignedWithSANs(t, dir, cn, caCert, caKey, nil, nil)
+}
+
+// generateSignedWithSANs creates a CA-signed cert+key in dir with custom SANs.
+func generateSignedWithSANs(t *testing.T, dir, cn, caCert, caKey string, dnsNames []string, ipAddresses []string) (certFile, keyFile string) {
+	t.Helper()
 	certFile = filepath.Join(dir, cn+".crt")
 	keyFile = filepath.Join(dir, cn+".key")
-	if err := GenerateSignedCert(cn, certFile, keyFile, caCert, caKey); err != nil {
+	if err := GenerateSignedCert(cn, certFile, keyFile, caCert, caKey, dnsNames, ipAddresses); err != nil {
 		t.Fatalf("GenerateSignedCert(%s): %v", cn, err)
 	}
 	return certFile, keyFile
@@ -133,6 +140,7 @@ func TestGenerateSignedCertCANotFound(t *testing.T) {
 		filepath.Join(dir, "server.key"),
 		"/nonexistent/ca.crt",
 		"/nonexistent/ca.key",
+		nil, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error for missing CA files")
@@ -151,10 +159,179 @@ func TestGenerateSignedCertInvalidCAKeyPEM(t *testing.T) {
 		filepath.Join(dir, "server.key"),
 		caCert,
 		badKey,
+		nil, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error for invalid CA key PEM")
 	}
+}
+
+// --- GenerateSignedCert SANs ---
+
+func TestGenerateSignedCertDefaultSANs(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSigned(t, dir, "server", caCert, caKey)
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	if len(cert.DNSNames) != 2 {
+		t.Errorf("expected 2 DNS SANs, got %d: %v", len(cert.DNSNames), cert.DNSNames)
+	}
+	if !containsStr(cert.DNSNames, "localhost") {
+		t.Errorf("expected 'localhost' in DNS SANs: %v", cert.DNSNames)
+	}
+	if !containsStr(cert.DNSNames, "server") {
+		t.Errorf("expected 'server' (CN) in DNS SANs: %v", cert.DNSNames)
+	}
+	if len(cert.IPAddresses) != 2 {
+		t.Errorf("expected 2 IP SANs, got %d: %v", len(cert.IPAddresses), cert.IPAddresses)
+	}
+	hasIPv4 := false
+	hasIPv6 := false
+	for _, ip := range cert.IPAddresses {
+		if ip.Equal(net.ParseIP("127.0.0.1")) {
+			hasIPv4 = true
+		}
+		if ip.Equal(net.ParseIP("::1")) {
+			hasIPv6 = true
+		}
+	}
+	if !hasIPv4 {
+		t.Error("expected 127.0.0.1 in IP SANs")
+	}
+	if !hasIPv6 {
+		t.Error("expected ::1 in IP SANs")
+	}
+}
+
+func TestGenerateSignedCertCustomDNSNames(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSignedWithSANs(t, dir, "api", caCert, caKey,
+		[]string{"api.example.com", "api.internal.local"}, nil)
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	// Should have custom DNS names + CN + "localhost"
+	expectedDNS := map[string]bool{"api.example.com": false, "api.internal.local": false, "api": false, "localhost": false}
+	for _, dns := range cert.DNSNames {
+		if _, ok := expectedDNS[dns]; ok {
+			expectedDNS[dns] = true
+		}
+	}
+	for dns, found := range expectedDNS {
+		if !found {
+			t.Errorf("expected DNS name %q in SANs: %v", dns, cert.DNSNames)
+		}
+	}
+}
+
+func TestGenerateSignedCertCustomIPs(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSignedWithSANs(t, dir, "server", caCert, caKey,
+		nil, []string{"10.0.0.1", "192.168.1.100"})
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	if len(cert.IPAddresses) != 2 {
+		t.Errorf("expected 2 IP SANs, got %d: %v", len(cert.IPAddresses), cert.IPAddresses)
+	}
+	ips := make(map[string]bool)
+	for _, ip := range cert.IPAddresses {
+		ips[ip.String()] = true
+	}
+	if !ips["10.0.0.1"] {
+		t.Errorf("expected 10.0.0.1 in IP SANs: %v", cert.IPAddresses)
+	}
+	if !ips["192.168.1.100"] {
+		t.Errorf("expected 192.168.1.100 in IP SANs: %v", cert.IPAddresses)
+	}
+}
+
+func TestGenerateSignedCertMixedCustomSANs(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSignedWithSANs(t, dir, "myhost", caCert, caKey,
+		[]string{"myhost.example.com"}, []string{"10.0.0.5"})
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	// Custom DNS + CN + localhost
+	if len(cert.DNSNames) != 3 {
+		t.Errorf("expected 3 DNS SANs, got %d: %v", len(cert.DNSNames), cert.DNSNames)
+	}
+	// Single custom IP
+	if len(cert.IPAddresses) != 1 {
+		t.Errorf("expected 1 IP SAN, got %d: %v", len(cert.IPAddresses), cert.IPAddresses)
+	}
+	if !containsStr(cert.DNSNames, "myhost.example.com") {
+		t.Errorf("expected 'myhost.example.com' in DNS SANs: %v", cert.DNSNames)
+	}
+	if !containsStr(cert.DNSNames, "myhost") {
+		t.Errorf("expected 'myhost' (CN) in DNS SANs: %v", cert.DNSNames)
+	}
+	if !containsStr(cert.DNSNames, "localhost") {
+		t.Errorf("expected 'localhost' in DNS SANs: %v", cert.DNSNames)
+	}
+}
+
+func TestGenerateSignedCertDedupeDNSNames(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSignedWithSANs(t, dir, "localhost", caCert, caKey,
+		[]string{"localhost", "example.com"}, nil)
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	// CN is "localhost" (duplicate of provided name), should only appear once
+	localhostCount := 0
+	for _, dns := range cert.DNSNames {
+		if dns == "localhost" {
+			localhostCount++
+		}
+	}
+	if localhostCount != 1 {
+		t.Errorf("expected 'localhost' to appear once, got %d: %v", localhostCount, cert.DNSNames)
+	}
+}
+
+func TestGenerateSignedCertInvalidIPIgnored(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	certFile, _ := generateSignedWithSANs(t, dir, "server", caCert, caKey,
+		nil, []string{"not-an-ip", "10.0.0.1"})
+
+	cert, err := LoadCACert(certFile)
+	if err != nil {
+		t.Fatalf("LoadCACert: %v", err)
+	}
+	if len(cert.IPAddresses) != 1 {
+		t.Errorf("expected 1 IP SAN (invalid IP ignored), got %d: %v", len(cert.IPAddresses), cert.IPAddresses)
+	}
+	if !cert.IPAddresses[0].Equal(net.ParseIP("10.0.0.1")) {
+		t.Errorf("expected only 10.0.0.1, got: %v", cert.IPAddresses)
+	}
+}
+
+func containsStr(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 // --- CertExpiry ---

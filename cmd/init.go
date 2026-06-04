@@ -79,10 +79,36 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintln(os.Stderr, "done")
 
+		// Prompt for server cert DNS names and IPs.
+		fmt.Fprintf(os.Stderr, "  Server DNS names [%s]: ", "localhost")
+		serverDNS, _ := reader.ReadString('\n')
+		serverDNS = strings.TrimSpace(serverDNS)
+		fmt.Fprintf(os.Stderr, "  Server IPs [%s]: ", "127.0.0.1, ::1")
+		serverIPs, _ := reader.ReadString('\n')
+		serverIPs = strings.TrimSpace(serverIPs)
+
 		serverCert := filepath.Join(home, "server.crt")
 		serverKey := filepath.Join(home, "server.key")
 		fmt.Fprintf(os.Stderr, "  Generating server cert...    ")
-		if err := tlsconfig.GenerateSignedCert("server", serverCert, serverKey, serverCAcert, serverCAkey); err != nil {
+		var serverDns []string
+		if serverDNS != "" {
+			for _, s := range strings.Split(serverDNS, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					serverDns = append(serverDns, s)
+				}
+			}
+		}
+		var serverIps []string
+		if serverIPs != "" {
+			for _, s := range strings.Split(serverIPs, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					serverIps = append(serverIps, s)
+				}
+			}
+		}
+		if err := tlsconfig.GenerateSignedCert("server", serverCert, serverKey, serverCAcert, serverCAkey, serverDns, serverIps); err != nil {
 			return fmt.Errorf("generate server cert: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "done")
@@ -93,10 +119,36 @@ func runInit(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("generate client CA: %w", err)
 		}
 
+		// Prompt for host cert DNS names and IPs.
+		fmt.Fprintf(os.Stderr, "  Host DNS names [%s]: ", "localhost")
+		hostDNS, _ := reader.ReadString('\n')
+		hostDNS = strings.TrimSpace(hostDNS)
+		fmt.Fprintf(os.Stderr, "  Host IPs [%s]: ", "127.0.0.1, ::1")
+		hostIPs, _ := reader.ReadString('\n')
+		hostIPs = strings.TrimSpace(hostIPs)
+
 		hostCert := filepath.Join(home, "host.crt")
 		hostKey := filepath.Join(home, "host.key")
 		fmt.Fprintf(os.Stderr, "  Generating host cert...      ")
-		if err := tlsconfig.GenerateSignedCert("host", hostCert, hostKey, clientCAcert, clientCAkey); err != nil {
+		var hostDns []string
+		if hostDNS != "" {
+			for _, s := range strings.Split(hostDNS, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					hostDns = append(hostDns, s)
+				}
+			}
+		}
+		var hostIps []string
+		if hostIPs != "" {
+			for _, s := range strings.Split(hostIPs, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					hostIps = append(hostIps, s)
+				}
+			}
+		}
+		if err := tlsconfig.GenerateSignedCert("host", hostCert, hostKey, clientCAcert, clientCAkey, hostDns, hostIps); err != nil {
 			return fmt.Errorf("generate host cert: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "done")
