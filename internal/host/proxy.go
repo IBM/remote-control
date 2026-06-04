@@ -150,7 +150,7 @@ func (h *Host) proxyPTYOutput(ctx context.Context, ptmx *os.File, client *apicli
 // When an approval prompt is active (approvalActive == true), the first byte of
 // the line is routed to approvalRespCh instead of the subprocess — no mutex is
 // held during I/O, eliminating the deadlock present in the prior design.
-func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *apiclient.APIClient, sessionID string) {
+func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, client *apiclient.APIClient, sessionID string, wsHost *WebSocketHost) {
 	type scanResult struct{ line []byte }
 	lineCh := make(chan scanResult, 1)
 
@@ -196,8 +196,46 @@ func (h *Host) proxyLocalStdin(ctx context.Context, stdinPipe *syncWriter, clien
 				}
 				continue
 			}
+
+			// Submit to subprocess stdin
+			if stdinPipe != nil {
+				if _, werr := stdinPipe.Write(res.line); werr != nil {
+					ch.Log(alog.DEBUG, "[remote-control] local stdin write error: %v", werr)
+				}
+			}
+
+			// Submit to server (prefer WebSocket, fallback to HTTP)
+			if wsHost != nil && wsHost.IsConnected() {
+				wsHostCh.Log(alog.DEBUG2, "Submitting local stdin via WebSocket")
+				if serr := h.submitStdinViaWS(wsHost, res.line); serr != nil {
+					wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send stdin error: %v", serr)
+				}
+			} else if client != nil {
+				wsHostCh.Log(alog.DEBUG2, "Submitting local stdin via HTTP")
+				if serr := client.EnqueueStdin(sessionID, types.HostClientID, res.line); serr != nil {
+					ch.Log(alog.DEBUG, "[remote-control] enqueue stdin error: %v", serr)
+				}
+			}
 		}
 	}
+}
+
+// submitStdinViaWS sends stdin data to the server via WebSocket
+func (h *Host) submitStdinViaWS(wsHost *WebSocketHost, data []byte) error {
+	entries := []types.StdinEntry{{Data: data}}
+	entryBytes, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	msg := types.WSMessage{
+		Type:    types.WSMessageStdin,
+		Message: entryBytes,
+	}
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	return wsHost.pipe.Send(msgData)
 }
 
 // proxyLocalStdinRaw reads individual bytes from os.Stdin (raw terminal mode)
@@ -269,6 +307,23 @@ func (h *Host) proxyLocalStdinRaw(ctx context.Context, ptmx *os.File, ptmxMu *sy
 
 			// Accumulate for submission
 			batch = append(batch, b)
+
+			// Submit when batch reaches threshold
+			if len(batch) >= batchThreshold {
+				// Submit to server (prefer WebSocket, fallback to HTTP)
+				if wsHost != nil && wsHost.IsConnected() {
+					wsHostCh.Log(alog.DEBUG2, "Submitting local stdin via WebSocket")
+					if serr := h.submitStdinViaWS(wsHost, batch); serr != nil {
+						wsHostCh.Log(alog.DEBUG, "[remote-control] WebSocket send stdin error: %v", serr)
+					}
+				} else if client != nil {
+					wsHostCh.Log(alog.DEBUG2, "Submitting local stdin via HTTP")
+					if serr := client.EnqueueStdin(sessionID, types.HostClientID, batch); serr != nil {
+						ch.Log(alog.DEBUG, "[remote-control] enqueue stdin error: %v", serr)
+					}
+				}
+				batch = batch[:0]
+			}
 		}
 	}
 }
