@@ -76,7 +76,7 @@ func runCertInit(cmd *cobra.Command, args []string) error {
 	serverCert := filepath.Join(dir, "server.crt")
 	serverKey := filepath.Join(dir, "server.key")
 	fmt.Fprintf(os.Stderr, "Generating server cert...      ")
-	if err := tlsconfig.GenerateSignedCert("server", serverCert, serverKey, serverCAcert, serverCAkey); err != nil {
+	if err := tlsconfig.GenerateSignedCert("server", serverCert, serverKey, serverCAcert, serverCAkey, nil, nil); err != nil {
 		return fmt.Errorf("generate server cert: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "done")
@@ -94,7 +94,7 @@ func runCertInit(cmd *cobra.Command, args []string) error {
 	hostCert := filepath.Join(dir, "host.crt")
 	hostKey := filepath.Join(dir, "host.key")
 	fmt.Fprintf(os.Stderr, "Generating host cert...        ")
-	if err := tlsconfig.GenerateSignedCert("host", hostCert, hostKey, clientCAcert, clientCAkey); err != nil {
+	if err := tlsconfig.GenerateSignedCert("host", hostCert, hostKey, clientCAcert, clientCAkey, nil, nil); err != nil {
 		return fmt.Errorf("generate host cert: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "done")
@@ -133,7 +133,7 @@ func runCertIssue(cmd *cobra.Command, args []string) error {
 	keyOut := filepath.Join(dir, name+".key")
 
 	fmt.Fprintf(os.Stderr, "Issuing cert for %q...\n", name)
-	if err := tlsconfig.GenerateSignedCert(name, certOut, keyOut, clientCAcert, clientCAkey); err != nil {
+	if err := tlsconfig.GenerateSignedCert(name, certOut, keyOut, clientCAcert, clientCAkey, nil, nil); err != nil {
 		return fmt.Errorf("issue cert: %w", err)
 	}
 	fmt.Printf("Certificate: %s\nKey:         %s\n", certOut, keyOut)

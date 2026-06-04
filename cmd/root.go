@@ -16,11 +16,12 @@ import (
 var chCli = alog.UseChannel("CLI")
 
 var (
-	flagServerURLs string
-	flagClientCert string
-	flagClientKey  string
-	flagClientCA   string
-	flagCExpr      string
+	flagServerURLs   string
+	flagClientCert   string
+	flagClientKey    string
+	flagClientCA     string
+	flagSkipHostname bool
+	flagCExpr        string
 )
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
@@ -36,12 +37,13 @@ var knownSubcommands = map[string]bool{
 // knownRCFlagValues are RC flags that consume the next argument as their value.
 // Used when scanning os.Args to find the wrapped command boundary.
 var knownRCFlagValues = map[string]bool{
-	"--server-urls": true,
-	"--client-cert": true,
-	"--client-key":  true,
-	"--client-ca":   true,
-	"-c":            true,
-	"--c":           true,
+	"--server-urls":          true,
+	"--client-cert":          true,
+	"--client-key":           true,
+	"--client-ca":            true,
+	"--skip-hostname-verify": true,
+	"-c":                     true,
+	"--c":                    true,
 }
 
 var rootCmd = &cobra.Command{
@@ -88,6 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagClientCert, "client-cert", "", "Client TLS certificate file")
 	rootCmd.PersistentFlags().StringVar(&flagClientKey, "client-key", "", "Client TLS key file")
 	rootCmd.PersistentFlags().StringVar(&flagClientCA, "client-ca", "", "CA cert file to trust for server certificate")
+	rootCmd.PersistentFlags().BoolVar(&flagSkipHostname, "skip-hostname-verification", false, "Skip server TLS hostname verification")
 	rootCmd.Flags().StringVarP(&flagCExpr, "c", "c", "", "Shell expression to execute via sh -c")
 }
 
@@ -177,6 +180,9 @@ func cliOverrides() map[string]string {
 	}
 	if flagClientCA != "" {
 		overrides["client-ca"] = flagClientCA
+	}
+	if flagSkipHostname {
+		overrides["skip-hostname-verification"] = "true"
 	}
 	return overrides
 }

@@ -35,10 +35,10 @@ type LoggingConfig struct {
 
 // TLSBundle holds TLS certificate configuration for one side of a connection.
 type TLSBundle struct {
-	CertFile           string `json:"cert_file"`
-	KeyFile            string `json:"key_file"`
-	TrustedCAFile      string `json:"trusted_ca_file"`
-	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
+	CertFile                 string `json:"cert_file"`
+	KeyFile                  string `json:"key_file"`
+	TrustedCAFile            string `json:"trusted_ca_file"`
+	SkipHostnameVerification bool   `json:"skip_hostname_verification"`
 }
 
 // Config holds the full remote-control configuration.
@@ -188,7 +188,7 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("REMOTE_CONTROL_SERVER_KEY"); v != "" {
 		cfg.ServerTLS.KeyFile = v
 	}
-	if v := os.Getenv("REMOTE_CONTROL_SERVER_CA"); v != "" {
+	if v := os.Getenv("REMOTE_CONTROL_SERVER_TRUSTED_CA"); v != "" {
 		cfg.ServerTLS.TrustedCAFile = v
 	}
 	if v := os.Getenv("REMOTE_CONTROL_CLIENT_CERT"); v != "" {
@@ -197,14 +197,14 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("REMOTE_CONTROL_CLIENT_KEY"); v != "" {
 		cfg.ClientTLS.KeyFile = v
 	}
-	if v := os.Getenv("REMOTE_CONTROL_CLIENT_CA"); v != "" {
+	if v := os.Getenv("REMOTE_CONTROL_CLIENT_TRUSTED_CA"); v != "" {
 		cfg.ClientTLS.TrustedCAFile = v
 	}
-	if v := os.Getenv("REMOTE_CONTROL_INSECURE_SKIP_VERIFY"); v != "" {
+	if v := os.Getenv("REMOTE_CONTROL_SKIP_HOSTNAME_VERIFICATION"); v != "" {
 		if val, err := strToBool(v); nil != err {
 			return err
 		} else {
-			cfg.ClientTLS.InsecureSkipVerify = val
+			cfg.ClientTLS.SkipHostnameVerification = val
 		}
 	}
 	if v := os.Getenv("REMOTE_CONTROL_AUTH_MODE"); v != "" {
@@ -266,11 +266,11 @@ func applyCLIOverrides(cfg *Config, overrides map[string]string) {
 	if v, ok := overrides["client-ca"]; ok {
 		cfg.ClientTLS.TrustedCAFile = v
 	}
-	if v, ok := overrides["insecure-skip-verify"]; ok {
+	if v, ok := overrides["skip-hostname-verification"]; ok {
 		if val, err := strToBool(v); nil != err {
 			return
 		} else {
-			cfg.ClientTLS.InsecureSkipVerify = val
+			cfg.ClientTLS.SkipHostnameVerification = val
 		}
 	}
 	if v, ok := overrides["auth-mode"]; ok {

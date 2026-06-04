@@ -28,7 +28,7 @@ func mtlsServer(t *testing.T, dir string) (serverURL, serverCAFile, clientCAFile
 	}
 	serverCert := filepath.Join(dir, "server.crt")
 	serverKey := filepath.Join(dir, "server.key")
-	if err := tlsconfig.GenerateSignedCert("localhost", serverCert, serverKey, serverCAcert, serverCAkey); err != nil {
+	if err := tlsconfig.GenerateSignedCert("localhost", serverCert, serverKey, serverCAcert, serverCAkey, nil, nil); err != nil {
 		t.Fatalf("generate server cert: %v", err)
 	}
 
@@ -70,11 +70,11 @@ func TestMTLSClientWithValidCert(t *testing.T) {
 	clientCAkey := filepath.Join(dir, "client-ca.key")
 	clientCert := filepath.Join(dir, "client.crt")
 	clientKey := filepath.Join(dir, "client.key")
-	if err := tlsconfig.GenerateSignedCert("test-client", clientCert, clientKey, clientCAFile, clientCAkey); err != nil {
+	if err := tlsconfig.GenerateSignedCert("test-client", clientCert, clientKey, clientCAFile, clientCAkey, nil, nil); err != nil {
 		t.Fatalf("generate client cert: %v", err)
 	}
 
-	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile, types.AuthModeMTLS)
+	clientTLSCfg, err := tlsconfig.BuildClientTLSConfig(clientCert, clientKey, serverCAFile, false, types.AuthModeMTLS)
 	if err != nil {
 		t.Fatalf("build client TLS: %v", err)
 	}
