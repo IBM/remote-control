@@ -266,7 +266,7 @@ func applyCLIOverrides(cfg *Config, overrides map[string]string) {
 	if v, ok := overrides["client-ca"]; ok {
 		cfg.ClientTLS.TrustedCAFile = v
 	}
-	if v, ok := overrides["skip-hostname-verify"]; ok {
+	if v, ok := overrides["skip-hostname-verification"]; ok {
 		if val, err := strToBool(v); nil != err {
 			return
 		} else {

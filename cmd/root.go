@@ -90,7 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagClientCert, "client-cert", "", "Client TLS certificate file")
 	rootCmd.PersistentFlags().StringVar(&flagClientKey, "client-key", "", "Client TLS key file")
 	rootCmd.PersistentFlags().StringVar(&flagClientCA, "client-ca", "", "CA cert file to trust for server certificate")
-	rootCmd.PersistentFlags().BoolVar(&flagSkipHostname, "skip-hostname-verify", false, "Skip server TLS hostname verification")
+	rootCmd.PersistentFlags().BoolVar(&flagSkipHostname, "skip-hostname-verification", false, "Skip server TLS hostname verification")
 	rootCmd.Flags().StringVarP(&flagCExpr, "c", "c", "", "Shell expression to execute via sh -c")
 }
 
@@ -182,7 +182,7 @@ func cliOverrides() map[string]string {
 		overrides["client-ca"] = flagClientCA
 	}
 	if flagSkipHostname {
-		overrides["skip-hostname-verify"] = "true"
+		overrides["skip-hostname-verification"] = "true"
 	}
 	return overrides
 }
