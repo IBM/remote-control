@@ -143,6 +143,7 @@ type ClientInfo struct {
 type SessionInfo struct {
 	ID     string        `json:"id"`
 	Status SessionStatus `json:"status"`
+	Name   string        `json:"name,omitempty"`
 
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -157,6 +158,7 @@ const HostClientID = "host"
 // CreateSessionRequest is the body for POST /sessions.
 type CreateSessionRequest struct {
 	ID string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // PollResponse is the body for GET /sessions/{id}/{m_type}/poll

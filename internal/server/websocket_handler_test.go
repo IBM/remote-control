@@ -43,7 +43,7 @@ func TestWebSocketUpgradeSuccess(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-ws-upgrade"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestWebSocketOutputChunkRoundTrip(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-ws-output"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestWebSocketStdinRoundTrip(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-ws-stdin"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestWebSocketMultipleConcurrentClients(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-ws-concurrent"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestWebSocketConnectionDrop(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-ws-drop"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestHandleAppendOutputWSInvalidJSON(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-invalid-output-json"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestHandleStdinSubmitWSInvalidJSON(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-invalid-stdin-json"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestHandleServerMessageUnknownType(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-invalid-type"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestWebSocketClientApprovalFlow(t *testing.T) {
 	defer testServer.Close()
 
 	sessionID := "test-approval"
-	_, err := store.Create(&sessionID, nil, cfg)
+	_, err := store.Create(&sessionID, nil, cfg, "")
 	if nil != err {
 		t.Fatalf("Failed to create session: %v", err)
 	}

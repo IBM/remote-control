@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,8 +70,11 @@ func buildWebSocketConfig(cfg *config.Config) *ws.WebSocketConfig {
 // PTY mode is used when os.Stdin is a real TTY (interactive terminal), giving
 // the subprocess a proper controlling terminal with PS1, colors, and readline.
 // Pipe mode is used otherwise (tests, CI, scripts) and preserves existing behavior.
-func (h *Host) Run(ctx context.Context, command []string) error {
-	sessionID, err := h.client.CreateSession(command)
+func (h *Host) Run(ctx context.Context, command []string, name string) error {
+	if name == "" && len(command) > 0 {
+		name = filepath.Base(command[0])
+	}
+	sessionID, err := h.client.CreateSession(command, name)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}

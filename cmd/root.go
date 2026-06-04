@@ -22,6 +22,7 @@ var (
 	flagClientCA     string
 	flagSkipHostname bool
 	flagCExpr        string
+	flagSessionName  string
 )
 
 // knownSubcommands are named subcommands that take priority over wrap mode.
@@ -44,6 +45,8 @@ var knownRCFlagValues = map[string]bool{
 	"--skip-hostname-verify": true,
 	"-c":                     true,
 	"--c":                    true,
+	"-n":                     true,
+	"--name":                 true,
 }
 
 var rootCmd = &cobra.Command{
@@ -92,6 +95,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagClientCA, "client-ca", "", "CA cert file to trust for server certificate")
 	rootCmd.PersistentFlags().BoolVar(&flagSkipHostname, "skip-hostname-verification", false, "Skip server TLS hostname verification")
 	rootCmd.Flags().StringVarP(&flagCExpr, "c", "c", "", "Shell expression to execute via sh -c")
+	rootCmd.Flags().StringVarP(&flagSessionName, "name", "n", "", "Session name to display when listing sessions")
 }
 
 // runWrapMode is invoked when no named subcommand is given. It scans os.Args
@@ -120,7 +124,7 @@ func runWrapMode(cmd *cobra.Command, args []string) error {
 	}
 
 	h := host.NewHost(cfg)
-	return h.Run(cmd.Context(), wrappedCmd)
+	return h.Run(cmd.Context(), wrappedCmd, flagSessionName)
 }
 
 // findWrappedCommandFromOSArgs scans raw os.Args (excluding argv[0]) and returns
