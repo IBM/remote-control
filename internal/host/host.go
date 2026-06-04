@@ -271,7 +271,7 @@ func (h *Host) runPipe(ctx context.Context, cancel context.CancelFunc, command [
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.proxyLocalStdin(ctx, stdinPipe, h.client, sessionID)
+		h.proxyLocalStdin(ctx, stdinPipe, h.client, sessionID, h.wsHost)
 	}()
 
 	wg.Add(1)
@@ -342,15 +342,24 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 		return
 	}
 
-	// Derive WebSocket URL from ServerURL
-	wsURL := ws.DeriveWebSocketURL(h.cfg.ServerURL)
-	ch.Log(alog.DEBUG, "[remote-control] WebSocket URL: %s (session: %s)", wsURL, sessionID)
+	// Derive WebSocket URLs from all server URLs
+	wsURLs := make([]string, 0, len(h.cfg.ServerURLs))
+	for _, serverURL := range h.cfg.ServerURLs {
+		wsURLs = append(wsURLs, ws.DeriveWebSocketURL(serverURL))
+	}
+	ch.Log(alog.DEBUG, "[remote-control] WebSocket URLs: %v (session: %s)", wsURLs, sessionID)
 
 	// Build WebSocket config
 	wsConfig := buildWebSocketConfig(h.cfg)
 
-	// Create WebSocket host connection
-	h.wsHost = NewWebSocketHost(wsURL, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
+	// Create WebSocket host connection with fallback across server URLs
+	var err error
+	h.wsHost, err = NewWebSocketHostWithFallback(ctx, wsURLs, h.cfg.ServerURLs, h.client.TLSConfig, sessionID, types.HostClientID, wsConfig)
+	if err != nil {
+		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
+		h.wsHost = nil
+		return
+	}
 
 	// Set up pending client handler - uses WebSocket callback with HTTP poll/ack fallback
 	h.wsHost.OnPendingClient(func(clientID string) {
@@ -362,12 +371,6 @@ func (h *Host) initWebSocket(ctx context.Context, sessionID string) {
 
 	// NOTE: The actual OnStdin handler is set in runPTY/runPipe after
 	// the write target (ptmx/stdinPipe) is available.
-
-	err := h.wsHost.Connect(ctx)
-	if err != nil {
-		ch.Log(alog.DEBUG, "[remote-control] WebSocket connection failed, will use HTTP polling: %v", err)
-		h.wsHost = nil
-	}
 }
 
 func (h *Host) closeWebSocket() {

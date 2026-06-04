@@ -64,7 +64,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	cfg := config.Defaults()
 	cfg.ConfigDir = home
-	cfg.ServerURL = serverURL
+	cfg.ServerURLs = []string{serverURL}
 
 	if genCerts == "" || genCerts == "y" || genCerts == "yes" {
 		if err := os.MkdirAll(home, 0700); err != nil {

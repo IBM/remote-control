@@ -19,18 +19,18 @@ var ch = alog.UseChannel("APICLIENT")
 
 // APIClient is an HTTP client for the remote-control server API.
 type APIClient struct {
-	BaseURL   string
-	TLSConfig *tls.Config // Exported so websocket can share
+	ServerURLs []string
+	TLSConfig  *tls.Config // Exported so websocket can share
 
 	httpClient *http.Client
 	apiKey     string
 }
 
-// NewAPIClient creates an APIClient for the given server URL.
+// NewAPIClient creates an APIClient for the given server URLs.
 func NewAPIClient(cfg *config.Config) *APIClient {
 	httpClient, tlsCfg := buildHTTPClient(cfg)
 	return &APIClient{
-		BaseURL:    cfg.ServerURL,
+		ServerURLs: cfg.ServerURLs,
 		TLSConfig:  tlsCfg,
 		httpClient: httpClient,
 		apiKey:     cfg.ClientApiKey,
@@ -73,24 +73,53 @@ func (c *APIClient) req(method, path string, body io.Reader) (*http.Request, err
 	return req, nil
 }
 
+func drainClose(resp *http.Response) {
+	if resp != nil {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		resp.Body.Close()
+	}
+}
+
+// doWithFallback tries the given request on each URL in ServerURLs until one
+// succeeds (any HTTP status code is a success; only transport errors trigger
+// the next URL).  Returns the first successful *http.Response, or the last
+// transport error if all URLs fail.
+func (c *APIClient) doWithFallback(path, method string, body io.Reader, bodyBytes []byte) (*http.Response, error) {
+	var lastErr error
+	for _, baseURL := range c.ServerURLs {
+		var bodyReader io.Reader
+		if body != nil {
+			bodyReader = body
+		} else if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
+		}
+		req, err := c.req(method, baseURL+path, bodyReader)
+		if err != nil {
+			lastErr = err
+			ch.Log(alog.DEBUG, "Building request to %s%v failed: %v", baseURL, path, err)
+			continue
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			ch.Log(alog.DEBUG, "Request to %s%v failed: %v", baseURL, path, err)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, fmt.Errorf("all server URLs (%d) failed: %w", len(c.ServerURLs), lastErr)
+}
+
 func (c *APIClient) post(path string, body any) (*http.Response, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := c.req(http.MethodPost, c.BaseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return c.httpClient.Do(req)
+	return c.doWithFallback(path, http.MethodPost, nil, data)
 }
 
 func (c *APIClient) get(path string) (*http.Response, error) {
-	req, err := c.req(http.MethodGet, c.BaseURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	return c.httpClient.Do(req)
+	return c.doWithFallback(path, http.MethodGet, nil, nil)
 }
 
 func (c *APIClient) patch(path string, body any) (*http.Response, error) {
@@ -98,26 +127,11 @@ func (c *APIClient) patch(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := c.req(http.MethodPatch, c.BaseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return c.httpClient.Do(req)
+	return c.doWithFallback(path, http.MethodPatch, nil, data)
 }
 
 func (c *APIClient) delete(path string) (*http.Response, error) {
-	req, err := c.req(http.MethodDelete, c.BaseURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	return c.httpClient.Do(req)
-}
-
-func drainClose(resp *http.Response) {
-	if resp != nil {
-		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		resp.Body.Close()
-	}
+	return c.doWithFallback(path, http.MethodDelete, nil, nil)
 }
 
 /* -- Public [host] --------------------------------------------------------- */

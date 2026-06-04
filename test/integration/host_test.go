@@ -50,7 +50,7 @@ func testServer(t *testing.T) string {
 func newTestHost(t *testing.T, serverURL string) *host.Host {
 	t.Helper()
 	return host.NewHost(&config.Config{
-		ServerURL:       serverURL,
+		ServerURLs:      []string{serverURL},
 		RequireApproval: false,
 		EnableWebSocket: false,
 		PollIntervalMs:  100,
