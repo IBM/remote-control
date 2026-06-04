@@ -35,7 +35,7 @@ func (s *Server) handleCreateSession(req types.CreateSessionRequest, conn *webso
 	if req.ID != "" {
 		inputId = &req.ID
 	}
-	sess, err := s.store.Create(inputId, conn, s.cfg)
+	sess, err := s.store.Create(inputId, conn, s.cfg, req.Name)
 	if err != nil {
 		return http.StatusInternalServerError, types.ErrorResponse{Error: err.Error()}
 	}
@@ -98,7 +98,7 @@ func (s *Server) handleAppendOutput(id string, req types.OutputChunk, conn *webs
 	respSuccess := http.StatusNoContent
 	if err != nil {
 		handlerCh.Log(alog.DEBUG, "Recreating unknown session %s", id)
-		sess, err = s.store.Create(&id, conn, s.cfg)
+		sess, err = s.store.Create(&id, conn, s.cfg, "")
 		if err != nil {
 			return http.StatusInternalServerError, types.ErrorResponse{Error: "Unable to recreate session"}
 		}
@@ -192,7 +192,7 @@ func (s *Server) handleRegisterClient(id string, clientID string, conn *websocke
 	// If the session isn't found, auto-create it for state recovery
 	if err != nil {
 		handlerCh.Log(alog.DEBUG, "Recreating session %s for client %s", id, clientID)
-		sess, err = s.store.Create(&id, conn, s.cfg)
+		sess, err = s.store.Create(&id, conn, s.cfg, "")
 		if nil != err {
 			handlerCh.Log(alog.WARNING, "Failed to recreate client session")
 			return http.StatusInternalServerError, err

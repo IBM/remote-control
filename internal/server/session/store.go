@@ -25,12 +25,12 @@ func NewStore(maxOutputBuffer int) *Store {
 }
 
 // Create creates a new session and stores it in memory.
-func (s *Store) Create(id *string, conn *websocket.Conn, cfg *config.Config) (*Session, error) {
+func (s *Store) Create(id *string, conn *websocket.Conn, cfg *config.Config, name string) (*Session, error) {
 	if nil == id {
 		newId := uuid.New().String()
 		id = &newId
 	}
-	sess := newSession(*id, conn, cfg)
+	sess := newSession(*id, conn, cfg, name)
 
 	s.mu.Lock()
 	s.sessions[*id] = sess

@@ -146,12 +146,13 @@ type Session struct {
 	approvalRequired bool
 }
 
-func newSession(id string, hostConn *websocket.Conn, cfg *config.Config) *Session {
+func newSession(id string, hostConn *websocket.Conn, cfg *config.Config, name string) *Session {
 	return &Session{
 		Info: types.SessionInfo{
 			ID:        id,
 			Status:    types.SessionStatusActive,
 			CreatedAt: time.Now(),
+			Name:      name,
 		},
 		outputBuffer:     make([]*types.OutputChunk, 0),
 		maxOutputBuffer:  cfg.MaxOutputBuffer,
