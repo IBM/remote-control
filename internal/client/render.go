@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/types"
 	"golang.org/x/term"
 )
 

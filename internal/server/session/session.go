@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/common/types"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

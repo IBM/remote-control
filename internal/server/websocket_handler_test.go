@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	"github.com/gabe-l-hart/remote-control/internal/server/session"
-	testmain "github.com/gabe-l-hart/remote-control/test"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/server/session"
+	testmain "github.com/IBM/remote-control/test"
 	"github.com/gorilla/websocket"
 )
 

@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gabe-l-hart/remote-control/internal/client"
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
-	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
-	"github.com/gabe-l-hart/remote-control/internal/server"
+	"github.com/IBM/remote-control/internal/client"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/common/types"
+	ws "github.com/IBM/remote-control/internal/common/websocket"
+	"github.com/IBM/remote-control/internal/server"
 )
 
 // TestWebSocketRecovery tests the automatic WebSocket reconnection and message

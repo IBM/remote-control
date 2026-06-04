@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gabe-l-hart/remote-control/internal/common/config"
-	"github.com/gabe-l-hart/remote-control/internal/server"
+	"github.com/IBM/remote-control/internal/common/config"
+	"github.com/IBM/remote-control/internal/server"
 )
 
 // approvalServer starts a server with RequireApproval=true for approval tests.

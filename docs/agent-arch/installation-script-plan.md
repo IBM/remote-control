@@ -4,7 +4,7 @@
 
 Create a single-command installation script for `remote-control` that can be executed via:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gabe-l-hart/remote-control/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/IBM/remote-control/main/install.sh | sh
 ```
 
 ## Requirements
@@ -76,7 +76,7 @@ install.sh
 if command -v go >/dev/null 2>&1; then
     # Extract version (e.g., "go1.24.0" -> "1.24.0")
     current_version=$(go version | awk '{print $3}' | sed 's/go//')
-    
+
     # Compare versions (need to handle semantic versioning)
     # Required: 1.24.0
     # Accept: 1.24.0, 1.24.1, 1.25.0, 2.0.0, etc.
@@ -93,24 +93,24 @@ version_gte() {
     # Handles semantic versioning (major.minor.patch)
     local ver1="$1"
     local ver2="$2"
-    
+
     # Split versions into components
     local IFS='.'
     read -ra ver1_parts <<< "$ver1"
     read -ra ver2_parts <<< "$ver2"
-    
+
     # Compare major, minor, patch
     for i in 0 1 2; do
         local v1="${ver1_parts[$i]:-0}"
         local v2="${ver2_parts[$i]:-0}"
-        
+
         if [ "$v1" -gt "$v2" ]; then
             return 0
         elif [ "$v1" -lt "$v2" ]; then
             return 1
         fi
     done
-    
+
     return 0  # Equal versions
 }
 ```
@@ -151,7 +151,7 @@ If Go is not available or version is insufficient:
 install_binary() {
     local binary_path="$1"
     local install_location=""
-    
+
     # Try system-wide first
     if [ -w /usr/local/bin ]; then
         install_location="/usr/local/bin/remote-control"
@@ -161,7 +161,7 @@ install_binary() {
         install_location="$HOME/.local/bin/remote-control"
         mkdir -p "$HOME/.local/bin"
         log_info "Installing to $HOME/.local/bin (user-local)"
-        
+
         # Check if in PATH
         if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
             log_info "Note: Add $HOME/.local/bin to your PATH"
@@ -169,10 +169,10 @@ install_binary() {
             log_info "  export PATH=\"\$HOME/.local/bin:\$PATH\""
         fi
     fi
-    
+
     cp "$binary_path" "$install_location"
     chmod +x "$install_location"
-    
+
     echo "$install_location"
 }
 ```
@@ -239,18 +239,18 @@ set -o pipefail # Exit on pipe failure
 ```bash
 check_dependencies() {
     local missing_deps=()
-    
+
     for cmd in git tar; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             missing_deps+=("$cmd")
         fi
     done
-    
+
     # Check for curl or wget
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
         missing_deps+=("curl or wget")
     fi
-    
+
     if [ ${#missing_deps[@]} -gt 0 ]; then
         log_error "Missing required dependencies: ${missing_deps[*]}"
         log_error "Please install them and try again."
@@ -263,25 +263,25 @@ check_dependencies() {
 ```bash
 verify_installation() {
     local install_path="$1"
-    
+
     # Check binary exists
     if [ ! -f "$install_path" ]; then
         log_error "Binary not found at $install_path"
         return 1
     fi
-    
+
     # Check binary is executable
     if [ ! -x "$install_path" ]; then
         log_error "Binary at $install_path is not executable"
         return 1
     fi
-    
+
     # Test binary runs
     if ! "$install_path" version >/dev/null 2>&1; then
         log_error "Binary at $install_path failed to run"
         return 1
     fi
-    
+
     log_success "Installation verified successfully"
     return 0
 }

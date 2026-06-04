@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
-	"github.com/gabe-l-hart/remote-control/internal/common/tlsconfig"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/tlsconfig"
+	"github.com/IBM/remote-control/internal/common/types"
 )
 
 // AuthConfig holds authentication configuration

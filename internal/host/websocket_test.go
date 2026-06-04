@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	ws "github.com/gabe-l-hart/remote-control/internal/common/websocket"
-	"github.com/gabe-l-hart/remote-control/internal/common/types"
+	"github.com/IBM/remote-control/internal/common/types"
+	ws "github.com/IBM/remote-control/internal/common/websocket"
 	gowebsocket "github.com/gorilla/websocket"
 )
 
