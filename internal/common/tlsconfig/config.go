@@ -74,6 +74,7 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, sk
 	}
 
 	// Load CA pool (falls back to system CAs if empty)
+	ch.Log(alog.DEBUG, "[BuildClientTLSConfig] Attempting to load server CA from %s", serverCAFile)
 	rootCAs := loadCertPoolOrSystem(serverCAFile)
 
 	config := &tls.Config{
@@ -82,7 +83,9 @@ func BuildClientTLSConfig(clientCertFile, clientKeyFile, serverCAFile string, sk
 	}
 
 	if skipHostnameVerification {
-		config.VerifyPeerCertificate = verifyPeerCertificateNoHostname(rootCAs)
+		ch.Log(alog.DEBUG, "Skipping hostname verification")
+		config.InsecureSkipVerify = true
+		config.VerifyConnection = verifyConnectionNoHostname(rootCAs)
 	}
 
 	// Only load client cert when both cert AND key are present
@@ -121,6 +124,7 @@ func loadCertPoolOrSystem(caFile string) *x509.CertPool {
 			ch.Log(alog.DEBUG, "[remote-control] no system cert pool available: %v", err)
 			return nil
 		}
+		ch.Log(alog.DEBUG2, "[remote-control] loaded system cert pool")
 		return pool
 	}
 	pool, err := loadCertPool(caFile)
@@ -133,42 +137,37 @@ func loadCertPoolOrSystem(caFile string) *x509.CertPool {
 		}
 		return systemPool
 	}
+	ch.Log(alog.DEBUG2, "[remote-control] loaded cert pool from %s", caFile)
 	return pool
 }
 
-// verifyPeerCertificateNoHostname returns a VerifyPeerCertificate function
-// that performs full TLS certificate verification (chain, expiry, key usage)
-// but skips hostname verification.
-func verifyPeerCertificateNoHostname(rootCAs *x509.CertPool) func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-	return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
+func verifyConnectionNoHostname(rootCAs *x509.CertPool) func(cs tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		// When InsecureSkipVerify is true, we need to manually verify the cert chain
+		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("no certificates received from server")
 		}
 
-		certs := make([]*x509.Certificate, 0, len(rawCerts))
-		for _, der := range rawCerts {
-			cert, err := x509.ParseCertificate(der)
-			if err != nil {
-				return fmt.Errorf("parse certificate: %w", err)
-			}
-			certs = append(certs, cert)
-		}
-
-		leaf := certs[0]
+		leaf := cs.PeerCertificates[0]
 		intermediates := x509.NewCertPool()
-		for _, cert := range certs[1:] {
+		for _, cert := range cs.PeerCertificates[1:] {
 			intermediates.AddCert(cert)
 		}
 
+		// Perform full verification WITHOUT hostname check
+		// by not setting DNSName in VerifyOptions
 		_, err := leaf.Verify(x509.VerifyOptions{
 			Roots:         rootCAs,
 			Intermediates: intermediates,
 			CurrentTime:   time.Now(),
+			// Explicitly NOT setting DNSName - this skips hostname verification
+			// while still doing all other checks (chain, expiry, key usage, etc.)
 		})
 		if err != nil {
 			return fmt.Errorf("certificate verification failed: %w", err)
 		}
 
+		ch.Log(alog.DEBUG2, "Certificate verified (hostname check skipped)")
 		return nil
 	}
 }
