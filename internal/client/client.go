@@ -125,7 +125,11 @@ func (c *Client) pickSession(_ context.Context) (string, error) {
 	}
 	fmt.Fprintln(os.Stderr, "Available sessions:")
 	for i, s := range sessions {
-		fmt.Fprintf(os.Stderr, "  [%d] %s  (%s)\n", i+1, s.ID, string(s.Status))
+		if s.Name != "" {
+			fmt.Fprintf(os.Stderr, "  [%d] %s: %s\n", i+1, s.ID, s.Name)
+		} else {
+			fmt.Fprintf(os.Stderr, "  [%d] %s\n", i+1, s.ID)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Select session [1-%d]:", len(sessions))
 
