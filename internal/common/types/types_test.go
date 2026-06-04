@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -333,6 +334,76 @@ func TestSessionInfoJSONMarshalingWithOptionalFields(t *testing.T) {
 	}
 }
 
+func TestSessionInfoWithOptionalFields(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	exitCode := 1
+	info := SessionInfo{
+		ID:          "session-complete",
+		Status:      SessionStatusCompleted,
+		Name:        "test-session",
+		CreatedAt:   now,
+		CompletedAt: &now,
+		ExitCode:    &exitCode,
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var decoded SessionInfo
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if decoded.ID != info.ID {
+		t.Errorf("ID mismatch")
+	}
+	if decoded.Status != info.Status {
+		t.Errorf("Status mismatch")
+	}
+	if decoded.Name != info.Name {
+		t.Errorf("Name mismatch: expected %s, got %s", info.Name, decoded.Name)
+	}
+	if decoded.CompletedAt == nil {
+		t.Errorf("CompletedAt should not be nil")
+	}
+	if decoded.ExitCode == nil || *decoded.ExitCode != 1 {
+		t.Errorf("ExitCode mismatch")
+	}
+}
+
+func TestSessionInfoNameOmittedWhenEmpty(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	info := SessionInfo{
+		ID:        "session-active",
+		Status:    SessionStatusActive,
+		CreatedAt: now,
+	}
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	// Verify that "name" is not present in JSON when empty
+	jsonStr := string(data)
+	if strings.Contains(jsonStr, `"name"`) {
+		t.Errorf("name field should be omitted when empty, got: %s", jsonStr)
+	}
+
+	var decoded SessionInfo
+	err = json.Unmarshal(data, &decoded)
+	if err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if decoded.Name != "" {
+		t.Errorf("Name should be empty, got %s", decoded.Name)
+	}
+}
+
 func TestSessionInfoJSONMarshalingWithoutOptionalFields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	info := SessionInfo{
@@ -381,6 +452,8 @@ func TestCreateSessionRequest(t *testing.T) {
 	}{
 		{"WithID", CreateSessionRequest{ID: "custom-id"}},
 		{"WithoutID", CreateSessionRequest{}},
+		{"WithName", CreateSessionRequest{Name: "my-session"}},
+		{"WithIDAndName", CreateSessionRequest{ID: "custom-id", Name: "my-session"}},
 	}
 
 	for _, tt := range tests {
@@ -398,6 +471,9 @@ func TestCreateSessionRequest(t *testing.T) {
 
 			if decoded.ID != tt.req.ID {
 				t.Errorf("ID mismatch: expected %s, got %s", tt.req.ID, decoded.ID)
+			}
+			if decoded.Name != tt.req.Name {
+				t.Errorf("Name mismatch: expected %s, got %s", tt.req.Name, decoded.Name)
 			}
 		})
 	}
