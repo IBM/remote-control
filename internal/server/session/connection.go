@@ -33,6 +33,16 @@ func (c *Connection) Close() {
 	c.pipe.Close()
 }
 
+// Reconnect closes any existing pipe and installs a new one backed by conn,
+// updating hasConn to reflect whether the new connection is real.
+func (c *Connection) Reconnect(conn *websocket.Conn) {
+	if c.pipe != nil {
+		c.pipe.Close()
+	}
+	c.pipe = ws.NewPipe(conn)
+	c.hasConn = conn != nil
+}
+
 // GetSendChan returns the underlying send channel.
 func (c *Connection) GetSendChan() chan []byte {
 	return c.pipe.SendChan()

@@ -232,8 +232,12 @@ func (s *Session) Complete(exitCode int) {
 	s.Info.ExitCode = &exitCode
 }
 
-// RegisterClient adds a new client to the session in pending state.
-// If clientID is HostClientID, updates the host connection instead.
+// RegisterClient adds a new client to the session, or reuses an existing
+// client record if clientID matches one already known to the session (e.g. a
+// client that pre-registered over HTTP before upgrading to a WebSocket, or a
+// client reconnecting after a disconnect). If clientID is HostClientID,
+// updates the host connection instead. Approval/permission state is preserved
+// across reuse.
 func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string, *SessionClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -247,6 +251,18 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 		s.hostConn.Info.JoinedAt = time.Now()
 		sessCh.Log(alog.DEBUG, "Updated host websocket connection")
 		return types.HostClientID, s.hostConn
+	}
+
+	// Reuse an existing client record if the caller identified a known client
+	if clientID != "" {
+		if existing, ok := s.clients[clientID]; ok {
+			existing.mu.Lock()
+			existing.conn.Reconnect(conn)
+			existing.mu.Unlock()
+			existing.Info.JoinedAt = time.Now()
+			sessCh.Log(alog.DEBUG, "Reusing existing client record for %s", clientID)
+			return clientID, existing
+		}
 	}
 
 	client := uuid.New().String()

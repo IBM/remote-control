@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sync"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -30,6 +31,17 @@ type WebSocketConnection struct {
 
 type OutputHandler func(chunk types.OutputChunk)
 
+// buildWSURL constructs the /ws/{sessionID} URL, including the client's
+// existing clientID (if any) so the server can reuse its client record
+// instead of creating a new one on every connect/reconnect.
+func buildWSURL(base, sessionID, clientID string) string {
+	wsURL := base + "/ws/" + sessionID
+	if clientID != "" {
+		wsURL += "?client_id=" + url.QueryEscape(clientID)
+	}
+	return wsURL
+}
+
 // NewWebSocketConnection creates a new WebSocket connection
 func NewWebSocketConnection(url string, tlsConfig *tls.Config, clientID, sessionID string, wsConfig *ws.WebSocketConfig) *WebSocketConnection {
 	return &WebSocketConnection{
@@ -54,7 +66,7 @@ func NewWebSocketConnectionWithFallback(ctx context.Context, wsURLs []string, cl
 	// Try to dial each URL
 	var lastErr error
 	for _, wsURL := range wsURLs {
-		wsURLWithPath := wsURL + "/ws/" + sessionID
+		wsURLWithPath := buildWSURL(wsURL, sessionID, clientID)
 
 		pipe, err := ws.DialWithFallback(ctx, []string{wsURLWithPath}, tlsConfig, wsConfig)
 		if err != nil {
@@ -89,7 +101,7 @@ func (c *WebSocketConnection) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	wsURL := c.url + "/ws/" + c.sessionID
+	wsURL := buildWSURL(c.url, c.sessionID, c.clientID)
 	wsCh.Log(alog.DEBUG, "Dialing WebSocket at [%s]", wsURL)
 
 	pipe, err := ws.Dial(ctx, wsURL, c.tlsConfig, c.wsConfig)
