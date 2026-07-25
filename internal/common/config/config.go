@@ -61,6 +61,18 @@ type Config struct {
 	ClientTimeoutSeconds int              `json:"client_timeout_seconds"`
 	MaxOutputBuffer      int              `json:"max_output_buffer"`
 
+	// MaxClientQueueLength bounds how many not-yet-delivered messages the
+	// server holds per client per message type (e.g. output chunks awaiting
+	// WebSocket delivery or HTTP long-poll pickup). This is distinct from
+	// MaxOutputBuffer, which bounds the session-wide replay buffer used to
+	// catch up newly-approved/reconnecting clients (in bytes, shared across
+	// all clients); MaxClientQueueLength instead bounds each individual
+	// client's own undelivered-message backlog (in message count), which also
+	// carries non-output message types (e.g. stdin, pending-client notices)
+	// that MaxOutputBuffer has no bearing on. Oldest messages are dropped once
+	// a client's queue exceeds this length. Zero or negative means unbounded.
+	MaxClientQueueLength int `json:"max_client_queue_length"`
+
 	// WebSocket configuration
 	EnableWebSocket        bool   `json:"enable_websocket"`
 	WebSocketPath          string `json:"websocket_path"`
@@ -94,6 +106,7 @@ func Defaults() *Config {
 		PollIntervalMs:                    100,
 		ClientTimeoutSeconds:              60,
 		MaxOutputBuffer:                   1024 * 1024,
+		MaxClientQueueLength:              512,
 		EnableWebSocket:                   true,
 		WSFailureThreshold:                3,
 		WSFailureWindow:                   60,

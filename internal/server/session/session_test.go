@@ -347,6 +347,53 @@ func TestRegisterClientNotifiesHost(t *testing.T) {
 	}
 }
 
+func TestRegisterClientReusesExistingRecord(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
+
+	// Simulate the HTTP pre-registration step (no connection yet)
+	clientID, client := sess.RegisterClient("", nil)
+	if err := sess.ApproveClient(clientID, types.PermissionReadWrite); err != nil {
+		t.Fatalf("ApproveClient failed: %v", err)
+	}
+
+	// Simulate the follow-up WebSocket upgrade identifying the same client
+	reusedID, reusedClient := sess.RegisterClient(clientID, nil)
+
+	if reusedID != clientID {
+		t.Errorf("expected reused client ID %s, got %s", clientID, reusedID)
+	}
+	if reusedClient != client {
+		t.Error("expected the same SessionClient record to be reused, got a different one")
+	}
+	// Approval state from before the reconnect should be preserved, not reset
+	if reusedClient.Info.Approval != types.ApprovalApproved {
+		t.Errorf("expected approval to be preserved across reuse, got %s", reusedClient.Info.Approval)
+	}
+	if reusedClient.Info.Permission != types.PermissionReadWrite {
+		t.Errorf("expected permission to be preserved across reuse, got %v", reusedClient.Info.Permission)
+	}
+
+	if len(sess.clients) != 1 {
+		t.Errorf("expected exactly 1 client record after reuse, got %d", len(sess.clients))
+	}
+}
+
+func TestRegisterClientUnknownIDMintsNew(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
+
+	clientID, client := sess.RegisterClient("some-id-the-session-has-never-seen", nil)
+
+	if clientID == "" {
+		t.Error("expected a non-empty client ID to be minted")
+	}
+	if clientID == "some-id-the-session-has-never-seen" {
+		t.Error("expected an unknown ID not to be reused verbatim")
+	}
+	if client.Info.Approval != types.ApprovalPending {
+		t.Errorf("expected pending status for a freshly minted client, got %s", client.Info.Approval)
+	}
+}
+
 func TestRegisterClientIdentifiesHost(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
@@ -943,5 +990,37 @@ func TestAckWithoutPeekPreservesAllMessages(t *testing.T) {
 	remaining := sess.PeekClientQueue(clientID, types.WSMessageOutput)
 	if len(remaining) != 5 {
 		t.Errorf("expected 5 remaining messages, got %d", len(remaining))
+	}
+}
+
+func TestSendQueueCappedForPermanentlyFailingClient(t *testing.T) {
+	const maxQueueLength = 512
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024, MaxClientQueueLength: maxQueueLength}, "")
+
+	// nil conn means Send will never succeed for this client
+	_, client := sess.RegisterClient("", nil)
+
+	for i := 0; i < maxQueueLength+50; i++ {
+		chunk := &types.OutputChunk{
+			Stream: types.StreamStdout,
+			Data:   []byte(fmt.Sprintf("chunk%d", i)),
+		}
+		Send(client, types.WSMessageOutput, chunk)
+	}
+
+	queue := client.GetAllQueue(types.WSMessageOutput)
+	if len(queue) != maxQueueLength {
+		t.Errorf("expected queue length capped at %d, got %d", maxQueueLength, len(queue))
+	}
+
+	// The oldest entries should have been dropped, so the surviving entries
+	// should be the most recent ones sent.
+	last, ok := queue[len(queue)-1].(*types.OutputChunk)
+	if !ok {
+		t.Fatalf("unexpected type in queue")
+	}
+	expected := fmt.Sprintf("chunk%d", maxQueueLength+49)
+	if string(last.Data) != expected {
+		t.Errorf("expected last queued chunk to be %s, got %s", expected, string(last.Data))
 	}
 }

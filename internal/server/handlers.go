@@ -199,10 +199,11 @@ func (s *Server) handleRegisterClient(id string, clientID string, conn *websocke
 		}
 	}
 
-	// If no clientID provided (HTTP POST), generate a new client
-	if clientID == "" && conn != nil {
-		clientID = uuid.New().String()
-	} else if conn == nil {
+	// If no clientID provided, generate a new one. A clientID supplied by the
+	// caller (over HTTP pre-registration or a WebSocket upgrade) is preserved
+	// so that Session.RegisterClient can reuse an existing client record
+	// instead of creating an orphaned duplicate.
+	if clientID == "" {
 		clientID = uuid.New().String()
 	}
 
