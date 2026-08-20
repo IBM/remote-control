@@ -150,14 +150,28 @@ func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request)
 // handleRegisterClient handles POST /sessions/{id}/clients.
 // Server generates a unique client ID and returns it to the client.
 func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Request) {
-	// Get client_id query parameter
 	clientID := r.URL.Query().Get("client_id")
+	// Prevent non-host callers from claiming the reserved host identity.
+	if clientID == types.HostClientID {
+		authCtx := GetAuthContext(r)
+		if authCtx != nil && authCtx.Mode != types.AuthModeNone && authCtx.ClientID != types.HostClientID {
+			writeJSON(w, http.StatusForbidden, types.ErrorResponse{Error: "forbidden: cannot register as host"})
+			return
+		}
+	}
 	status, resp := s.handleRegisterClient(r.PathValue("id"), clientID, nil)
 	writeJSON(w, status, resp)
 }
 
 // handleApproveClient handles POST /sessions/{id}/clients/{cid}/approve.
 func (s *Server) handleApproveClientRoute(w http.ResponseWriter, r *http.Request) {
+	// Only the host may approve clients.
+	authCtx := GetAuthContext(r)
+	if authCtx != nil && authCtx.Mode != types.AuthModeNone && authCtx.ClientID != types.HostClientID {
+		writeJSON(w, http.StatusForbidden, types.ErrorResponse{Error: "forbidden: only the host may approve clients"})
+		return
+	}
+
 	id := r.PathValue("id")
 	cid := r.PathValue("cid")
 
@@ -176,6 +190,12 @@ func (s *Server) handleApproveClientRoute(w http.ResponseWriter, r *http.Request
 
 // handleDenyClient handles POST /sessions/{id}/clients/{cid}/deny.
 func (s *Server) handleDenyClientRoute(w http.ResponseWriter, r *http.Request) {
+	// Only the host may deny clients.
+	authCtx := GetAuthContext(r)
+	if authCtx != nil && authCtx.Mode != types.AuthModeNone && authCtx.ClientID != types.HostClientID {
+		writeJSON(w, http.StatusForbidden, types.ErrorResponse{Error: "forbidden: only the host may deny clients"})
+		return
+	}
 	if status, resp := s.handleDenyClient(r.PathValue("id"), r.PathValue("cid")); nil == resp {
 		w.WriteHeader(status)
 	} else {

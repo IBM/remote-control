@@ -23,10 +23,22 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 	switch authMode {
 	case types.AuthModeMTLS:
 		ch.Log(alog.DEBUG, "Configuring server mTLS Auth")
-		// Require and verify client certificates (clientCAFile is optional, falls back to system CAs)
-		clientCAs = loadCertPoolOrSystem(clientCAFile)
-		if clientCAs != nil {
+		if clientCAFile != "" {
+			// An explicit CA file was configured: load it strictly; a missing or
+			// invalid file is a misconfiguration that must not silently fall back
+			// to the system CA pool (which would accept any publicly-trusted cert).
+			pool, err := loadCertPool(clientCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("load client CA: %w", err)
+			}
+			clientCAs = pool
 			clientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			// No client CA configured: fall back to system CAs.
+			clientCAs = loadCertPoolOrSystem(clientCAFile)
+			if clientCAs != nil {
+				clientAuth = tls.RequireAndVerifyClientCert
+			}
 		}
 
 	case types.AuthModeProxy:

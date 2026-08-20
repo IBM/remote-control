@@ -558,6 +558,49 @@ func TestBuildServerTLSConfigBadCert(t *testing.T) {
 	}
 }
 
+func TestBuildServerTLSConfigBadCAFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	serverCert, serverKey := generateSigned(t, dir, "server", caCert, caKey)
+
+	badCA := filepath.Join(dir, "bad-client-ca.crt")
+	os.WriteFile(badCA, []byte("not a CA cert"), 0600) //nolint:errcheck
+
+	// A bad but non-empty clientCAFile must now return an error instead of
+	// silently falling back to the system CA pool.
+	_, err := BuildServerTLSConfig(serverCert, serverKey, badCA, types.AuthModeMTLS)
+	if err == nil {
+		t.Fatal("expected error when clientCAFile is set but invalid")
+	}
+}
+
+func TestBuildServerTLSConfigMissingCAFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	serverCert, serverKey := generateSigned(t, dir, "server", caCert, caKey)
+
+	// A non-existent clientCAFile must return an error.
+	_, err := BuildServerTLSConfig(serverCert, serverKey, "/nonexistent/client-ca.crt", types.AuthModeMTLS)
+	if err == nil {
+		t.Fatal("expected error when clientCAFile path does not exist")
+	}
+}
+
+func TestBuildServerTLSConfigEmptyCAFileUsesSystemCAs(t *testing.T) {
+	dir := t.TempDir()
+	caCert, caKey := generateCA(t, dir)
+	serverCert, serverKey := generateSigned(t, dir, "server", caCert, caKey)
+
+	// An empty clientCAFile is an explicit choice — should succeed (uses system CAs).
+	tlsCfg, err := BuildServerTLSConfig(serverCert, serverKey, "", types.AuthModeMTLS)
+	if err != nil {
+		t.Fatalf("BuildServerTLSConfig error: %v", err)
+	}
+	if tlsCfg == nil {
+		t.Fatal("expected non-nil TLS config")
+	}
+}
+
 // --- CheckCertExpiry ---
 
 func TestCheckCertExpiryValid(t *testing.T) {
