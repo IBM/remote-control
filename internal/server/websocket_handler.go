@@ -16,13 +16,23 @@ var wsHandlerCh = alog.UseChannel("WS_HANDLER")
 
 // handleWebSocket handles WebSocket upgrade requests
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	clientID := r.URL.Query().Get("client_id")
+
+	// Prevent non-host callers from claiming the reserved host identity.
+	if clientID == types.HostClientID {
+		authCtx := GetAuthContext(r)
+		if authCtx != nil && authCtx.Mode != types.AuthModeNone && authCtx.ClientID != types.HostClientID {
+			http.Error(w, "forbidden: cannot register as host", http.StatusForbidden)
+			return
+		}
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket upgrade failed: %v", err)
 		return
 	}
-	sessionID := r.PathValue("id")
-	clientID := r.URL.Query().Get("client_id")
 	status, resp := s.handleRegisterClient(sessionID, clientID, conn)
 	if nil == resp {
 		wsHandlerCh.Log(alog.DEBUG, "failed to register websocket client with status [%d]: %v", status, resp)
