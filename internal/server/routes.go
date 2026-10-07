@@ -93,9 +93,48 @@ func (s *Server) handleAppendOutputRoute(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// authOwner returns the authenticated principal for the request, or "" when
+// there is no auth context.
+func authOwner(r *http.Request) string {
+	if authCtx := GetAuthContext(r); authCtx != nil {
+		return authCtx.ClientID
+	}
+	return ""
+}
+
+// authorizeClientRoute verifies that the authenticated caller may act as the
+// client named by the caller-supplied clientID. The reserved host identity is
+// only usable by the host, and any other client record is only usable by the
+// principal that registered it. Unknown sessions and clients are passed
+// through so the handlers can produce their usual responses. On failure, a 403
+// is written and false is returned.
+func (s *Server) authorizeClientRoute(w http.ResponseWriter, r *http.Request, sessionID, clientID string) bool {
+	authCtx := GetAuthContext(r)
+	if authCtx == nil || authCtx.Mode == types.AuthModeNone || clientID == "" {
+		return true
+	}
+	if clientID == types.HostClientID {
+		if authCtx.ClientID != types.HostClientID {
+			writeJSON(w, http.StatusForbidden, types.ErrorResponse{Error: "forbidden: cannot act as host"})
+			return false
+		}
+		return true
+	}
+	if sess, err := s.store.Get(sessionID); nil == err {
+		if client := sess.GetClient(clientID); nil != client && client.Owner() != authCtx.ClientID {
+			writeJSON(w, http.StatusForbidden, types.ErrorResponse{Error: "forbidden: client belongs to another identity"})
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handlePollRoute(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	clientID := r.URL.Query().Get("client_id")
+	if !s.authorizeClientRoute(w, r, sessionID, clientID) {
+		return
+	}
 	mTypeStr := r.PathValue("m_type")
 	mTypeInt, err := strconv.Atoi(mTypeStr)
 	if nil != err {
@@ -113,6 +152,9 @@ func (s *Server) handlePollRoute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAckRoute(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	clientID := r.URL.Query().Get("client_id")
+	if !s.authorizeClientRoute(w, r, sessionID, clientID) {
+		return
+	}
 	mTypeStr := r.PathValue("m_type")
 	mTypeInt, err := strconv.Atoi(mTypeStr)
 	if nil != err {
@@ -133,6 +175,9 @@ func (s *Server) handleAckRoute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEnqueueStdinRoute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	clientID := r.URL.Query().Get("client_id")
+	if !s.authorizeClientRoute(w, r, id, clientID) {
+		return
+	}
 
 	var req types.StdinEntry
 	if err := readJSON(r, &req); err != nil {
@@ -159,7 +204,7 @@ func (s *Server) handleRegisterClientRoute(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	status, resp := s.handleRegisterClient(r.PathValue("id"), clientID, nil)
+	status, resp := s.handleRegisterClient(r.PathValue("id"), clientID, authOwner(r), nil)
 	writeJSON(w, status, resp)
 }
 

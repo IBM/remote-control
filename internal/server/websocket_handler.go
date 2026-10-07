@@ -33,7 +33,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		wsHandlerCh.Log(alog.DEBUG, "[remote-control] WebSocket upgrade failed: %v", err)
 		return
 	}
-	status, resp := s.handleRegisterClient(sessionID, clientID, conn)
+	status, resp := s.handleRegisterClient(sessionID, clientID, authOwner(r), conn)
 	if nil == resp {
 		wsHandlerCh.Log(alog.DEBUG, "failed to register websocket client with status [%d]: %v", status, resp)
 		return

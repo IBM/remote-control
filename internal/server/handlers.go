@@ -16,7 +16,7 @@ var handlerCh = alog.UseChannel("HANDLER")
 
 /* --- Helpers -------------------------------------------------------------- */
 
-// checkClientApproved verifies that the requesting client is approved.
+// checkClientApproval verifies that the requesting client is approved.
 // Returns (approved, readWrite). On false, the handler should return 403.
 func checkClientApproval(client *session.SessionClient, needWrite bool) bool {
 	if client.Info.Approval != types.ApprovalApproved {
@@ -134,6 +134,14 @@ func (s *Server) handlePoll(sessionID, clientID string, mType types.WSMessageTyp
 		return http.StatusNotFound, types.ErrorResponse{Error: err.Error()}
 	}
 
+	// Enforce client approval for non-host polls
+	if s.cfg.RequireApproval && clientID != types.HostClientID {
+		client := sess.GetClient(clientID)
+		if nil == client || !checkClientApproval(client, false) {
+			return http.StatusForbidden, types.ErrorResponse{Error: "not approved"}
+		}
+	}
+
 	// Peek at the queue for the given session
 	queued := sess.PeekClientQueue(clientID, mType)
 	elements := make([]json.RawMessage, 0, len(queued))
@@ -186,7 +194,9 @@ func (s *Server) handleEnqueueStdin(id, clientID string, req types.StdinEntry) (
 // handleRegisterClient handles POST /sessions/{id}/clients and WebSocket registration.
 // If conn is nil, this is an HTTP request and a new client is always created.
 // If conn is provided, this is a WebSocket request and clientID may identify the host.
-func (s *Server) handleRegisterClient(id string, clientID string, conn *websocket.Conn) (int, interface{}) {
+// owner is the authenticated principal making the request; an existing client
+// record is only reused when it was created by the same owner.
+func (s *Server) handleRegisterClient(id string, clientID string, owner string, conn *websocket.Conn) (int, interface{}) {
 	sess, err := s.store.Get(id)
 
 	// If the session isn't found, auto-create it for state recovery
@@ -209,7 +219,7 @@ func (s *Server) handleRegisterClient(id string, clientID string, conn *websocke
 
 	// Register or update the client
 	if conn != nil {
-		clientID, client := sess.RegisterClient(clientID, conn)
+		clientID, client := sess.RegisterClient(clientID, conn, owner)
 		// If approval is not required and this is not the host, auto-approve
 		if !s.cfg.RequireApproval && clientID != types.HostClientID {
 			handlerCh.Log(alog.DEBUG, "Auto-approving %s with permission %d", clientID, s.cfg.DefaultPermission)
@@ -222,7 +232,7 @@ func (s *Server) handleRegisterClient(id string, clientID string, conn *websocke
 	}
 
 	// HTTP POST: always create new client
-	clientID, client := sess.RegisterClient(clientID, nil)
+	clientID, client := sess.RegisterClient(clientID, nil, owner)
 	if !s.cfg.RequireApproval {
 		perm := types.Permission(s.cfg.DefaultPermission)
 		if perm != types.PermissionReadOnly && perm != types.PermissionReadWrite {

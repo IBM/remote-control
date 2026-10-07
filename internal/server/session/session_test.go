@@ -297,7 +297,7 @@ func TestEnqueueStdinDataCopied(t *testing.T) {
 func TestRegisterClient(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, client := sess.RegisterClient("", nil)
+	clientID, client := sess.RegisterClient("", nil, "")
 
 	if clientID == "" {
 		t.Error("expected non-empty client ID")
@@ -313,7 +313,7 @@ func TestRegisterClient(t *testing.T) {
 func TestRegisterClientPendingStatus(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	_, client := sess.RegisterClient("", nil)
+	_, client := sess.RegisterClient("", nil, "")
 
 	if client.Info.Approval != types.ApprovalPending {
 		t.Errorf("expected pending status, got %s", client.Info.Approval)
@@ -323,8 +323,8 @@ func TestRegisterClientPendingStatus(t *testing.T) {
 func TestRegisterClientUniqueIDs(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	id1, _ := sess.RegisterClient("", nil)
-	id2, _ := sess.RegisterClient("", nil)
+	id1, _ := sess.RegisterClient("", nil, "")
+	id2, _ := sess.RegisterClient("", nil, "")
 
 	if id1 == id2 {
 		t.Error("expected unique client IDs")
@@ -334,7 +334,7 @@ func TestRegisterClientUniqueIDs(t *testing.T) {
 func TestRegisterClientNotifiesHost(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024, RequireApproval: true}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	// Check host's pending client queue - the notification is queued for the host to poll
 	queue := sess.PeekClientQueue(types.HostClientID, types.WSMessagePendingClient)
@@ -347,17 +347,40 @@ func TestRegisterClientNotifiesHost(t *testing.T) {
 	}
 }
 
+func TestRegisterClientReuseRequiresMatchingOwner(t *testing.T) {
+	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
+
+	clientID, client := sess.RegisterClient("", nil, "alice")
+	if client.Owner() != "alice" {
+		t.Errorf("expected owner alice, got %q", client.Owner())
+	}
+
+	// The same owner reuses the record
+	if reusedID, _ := sess.RegisterClient(clientID, nil, "alice"); reusedID != clientID {
+		t.Errorf("expected reuse for matching owner, got %s", reusedID)
+	}
+
+	// A different owner gets a fresh record
+	otherID, other := sess.RegisterClient(clientID, nil, "mallory")
+	if otherID == clientID || other == client {
+		t.Error("expected a fresh record for a different owner")
+	}
+	if other.Owner() != "mallory" {
+		t.Errorf("expected owner mallory, got %q", other.Owner())
+	}
+}
+
 func TestRegisterClientReusesExistingRecord(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
 	// Simulate the HTTP pre-registration step (no connection yet)
-	clientID, client := sess.RegisterClient("", nil)
+	clientID, client := sess.RegisterClient("", nil, "")
 	if err := sess.ApproveClient(clientID, types.PermissionReadWrite); err != nil {
 		t.Fatalf("ApproveClient failed: %v", err)
 	}
 
 	// Simulate the follow-up WebSocket upgrade identifying the same client
-	reusedID, reusedClient := sess.RegisterClient(clientID, nil)
+	reusedID, reusedClient := sess.RegisterClient(clientID, nil, "")
 
 	if reusedID != clientID {
 		t.Errorf("expected reused client ID %s, got %s", clientID, reusedID)
@@ -381,7 +404,7 @@ func TestRegisterClientReusesExistingRecord(t *testing.T) {
 func TestRegisterClientUnknownIDMintsNew(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, client := sess.RegisterClient("some-id-the-session-has-never-seen", nil)
+	clientID, client := sess.RegisterClient("some-id-the-session-has-never-seen", nil, "")
 
 	if clientID == "" {
 		t.Error("expected a non-empty client ID to be minted")
@@ -398,7 +421,7 @@ func TestRegisterClientIdentifiesHost(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
 	// Register with host client ID
-	hostClientID, hostClient := sess.RegisterClient(types.HostClientID, nil)
+	hostClientID, hostClient := sess.RegisterClient(types.HostClientID, nil, "")
 
 	// Should return host client ID
 	if hostClientID != types.HostClientID {
@@ -425,7 +448,7 @@ func TestRegisterClientIdentifiesHost(t *testing.T) {
 func TestApproveClient(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	err := sess.ApproveClient(clientID, types.PermissionReadWrite)
 	if err != nil {
@@ -444,7 +467,7 @@ func TestApproveClient(t *testing.T) {
 func TestApproveClientWithReadOnly(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	err := sess.ApproveClient(clientID, types.PermissionReadOnly)
 	if err != nil {
@@ -473,7 +496,7 @@ func TestApproveClientNotFound(t *testing.T) {
 func TestDenyClient(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	err := sess.DenyClient(clientID)
 	if err != nil {
@@ -502,7 +525,7 @@ func TestDenyClientNotFound(t *testing.T) {
 func TestGetClientExists(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	client := sess.GetClient(clientID)
 	if client == nil {
@@ -541,7 +564,7 @@ func TestGetClientHost(t *testing.T) {
 func TestPeekClientQueueEmpty(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	queue := sess.PeekClientQueue(clientID, types.WSMessageOutput)
 	if len(queue) != 0 {
@@ -552,7 +575,7 @@ func TestPeekClientQueueEmpty(t *testing.T) {
 func TestClearClientQueue(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	_, _ = sess.RegisterClient("", nil)
+	_, _ = sess.RegisterClient("", nil, "")
 
 	// Enqueue some data
 	sess.EnqueueStdin([]byte("test"))
@@ -624,7 +647,7 @@ func TestCompleteTimestamp(t *testing.T) {
 func TestRemoveInactiveClients(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	// Set last poll time to past
 	client := sess.GetClient(clientID)
@@ -649,7 +672,7 @@ func TestRemoveInactiveClients(t *testing.T) {
 func TestRemoveInactiveClientsNoneRemoved(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, _ := sess.RegisterClient("", nil)
+	clientID, _ := sess.RegisterClient("", nil, "")
 
 	// Client is active (just registered)
 	removed := sess.RemoveInactiveClients(1 * time.Hour)
@@ -668,9 +691,9 @@ func TestRemoveInactiveClientsMultiple(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
 	// Register multiple clients
-	id1, _ := sess.RegisterClient("", nil)
-	id2, _ := sess.RegisterClient("", nil)
-	id3, _ := sess.RegisterClient("", nil)
+	id1, _ := sess.RegisterClient("", nil, "")
+	id2, _ := sess.RegisterClient("", nil, "")
+	id3, _ := sess.RegisterClient("", nil, "")
 
 	// Make two inactive
 	sess.GetClient(id1).Info.LastPollAt = time.Now().Add(-2 * time.Hour)
@@ -746,7 +769,7 @@ func TestConcurrentClientRegistration(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			id, _ := sess.RegisterClient("", nil)
+			id, _ := sess.RegisterClient("", nil, "")
 			clientIDs[idx] = id
 		}(i)
 	}
@@ -780,7 +803,7 @@ func TestAppendOutputConcurrentClients(t *testing.T) {
 	clientIDs := make([]string, numClients)
 
 	for i := 0; i < numClients; i++ {
-		clientID, client := sess.RegisterClient("", nil)
+		clientID, client := sess.RegisterClient("", nil, "")
 		clientIDs[i] = clientID
 		createdClients[i] = client
 		// Approve the client
@@ -827,7 +850,7 @@ func TestAppendOutputConcurrentClientsStress(t *testing.T) {
 	clientIDs := make([]string, numClients)
 
 	for i := 0; i < numClients; i++ {
-		clientID, client := sess.RegisterClient("", nil)
+		clientID, client := sess.RegisterClient("", nil, "")
 		clientIDs[i] = clientID
 		createdClients[i] = client
 		sess.ApproveClient(clientID, types.PermissionReadWrite)
@@ -868,7 +891,7 @@ func TestRemoveClientsDuringOutput(t *testing.T) {
 	clientIDs := make([]string, numClients)
 
 	for i := 0; i < numClients; i++ {
-		clientID, client := sess.RegisterClient("", nil)
+		clientID, client := sess.RegisterClient("", nil, "")
 		clientIDs[i] = clientID
 		createdClients[i] = client
 		sess.ApproveClient(clientID, types.PermissionReadWrite)
@@ -925,7 +948,7 @@ func TestRemoveClientsDuringOutput(t *testing.T) {
 func TestAckOnlyClearsPeekedMessages(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, client := sess.RegisterClient("", nil)
+	clientID, client := sess.RegisterClient("", nil, "")
 
 	// Step 1: Add first message
 	chunk1 := &types.OutputChunk{
@@ -971,7 +994,7 @@ func TestAckOnlyClearsPeekedMessages(t *testing.T) {
 func TestAckWithoutPeekPreservesAllMessages(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024}, "")
 
-	clientID, client := sess.RegisterClient("", nil)
+	clientID, client := sess.RegisterClient("", nil, "")
 
 	// Add some messages without peeking
 	for i := 0; i < 5; i++ {
@@ -998,7 +1021,7 @@ func TestSendQueueCappedForPermanentlyFailingClient(t *testing.T) {
 	sess := newSession("test", nil, &config.Config{MaxOutputBuffer: 1024, MaxClientQueueLength: maxQueueLength}, "")
 
 	// nil conn means Send will never succeed for this client
-	_, client := sess.RegisterClient("", nil)
+	_, client := sess.RegisterClient("", nil, "")
 
 	for i := 0; i < maxQueueLength+50; i++ {
 		chunk := &types.OutputChunk{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/IBM/alchemy-logging/src/go/alog"
@@ -233,11 +234,11 @@ func (c *APIClient) DenyClient(sessionID, clientID string) error {
 
 // RegisterClient registers this client with a session.
 func (c *APIClient) RegisterClient(sessionID, clientSelfID string) (clientID string, status types.ApprovalStatus, err error) {
-	url := "/sessions/" + sessionID + "/clients"
+	path := "/sessions/" + sessionID + "/clients"
 	if "" != clientSelfID {
-		url = url + "?client_id=" + clientSelfID
+		path += "?client_id=" + url.QueryEscape(clientSelfID)
 	}
-	resp, err := c.post(url, map[string]string{})
+	resp, err := c.post(path, map[string]string{})
 	if err != nil {
 		return "", types.ApprovalUnknown, err
 	}
@@ -252,7 +253,11 @@ func (c *APIClient) RegisterClient(sessionID, clientSelfID string) (clientID str
 // EnqueueStdin sends stdin data to the server queue.
 func (c *APIClient) EnqueueStdin(sessionID, source string, data []byte) error {
 	body := types.StdinEntry{Data: data}
-	resp, err := c.post("/sessions/"+sessionID+"/stdin", body)
+	path := "/sessions/" + sessionID + "/stdin"
+	if "" != source {
+		path += "?client_id=" + url.QueryEscape(source)
+	}
+	resp, err := c.post(path, body)
 	if err != nil {
 		return err
 	}
@@ -289,7 +294,7 @@ func (c *APIClient) ListSessions() ([]types.SessionInfo, error) {
 
 // Poll returns the list of queued message for the given client.
 func (c *APIClient) Poll(sessionID, clientID string, mType types.WSMessageType) (*types.PollResponse, error) {
-	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, clientID))
+	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sessionID, mType, url.QueryEscape(clientID)))
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +311,7 @@ func (c *APIClient) Poll(sessionID, clientID string, mType types.WSMessageType) 
 
 // Ack acknowledges receipt of the currently polled messages
 func (c *APIClient) Ack(sessionID, clientID string, mType types.WSMessageType) error {
-	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s", sessionID, mType, clientID))
+	resp, err := c.get(fmt.Sprintf("/sessions/%s/%d/ack?client_id=%s", sessionID, mType, url.QueryEscape(clientID)))
 	if err != nil {
 		return err
 	}
