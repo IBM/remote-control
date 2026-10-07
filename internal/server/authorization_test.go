@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -203,5 +204,168 @@ func TestApproveClientAllowedInNoneMode(t *testing.T) {
 		"anonymous", types.AuthModeNone)
 	if w.Code != http.StatusNoContent {
 		t.Errorf("expected 204 in none-mode, got %d", w.Code)
+	}
+}
+
+/* --- Client identity bound to authenticated principal ------------------- */
+
+// approveAuth has the host approve the given client with the given permission.
+func approveAuth(t *testing.T, srv *Server, sessionID, clientID string, perm types.Permission) {
+	t.Helper()
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sessionID+"/clients/"+clientID+"/approve",
+		types.ApproveClientRequest{Permission: perm},
+		types.HostClientID, types.AuthModeMTLS)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("approve client: expected 204, got %d", w.Code)
+	}
+}
+
+func stdinBody() types.StdinEntry {
+	return types.StdinEntry{Data: []byte("id\n")}
+}
+
+func TestStdinAsHostBlockedForNonHostIdentity(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+
+	// Attacker with a valid but unapproved identity claims to be the host.
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/stdin?client_id=host", stdinBody(), "attacker", types.AuthModeMTLS)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-host submitting stdin as host, got %d", w.Code)
+	}
+
+	// Nothing may have reached the host's stdin queue.
+	s, err := srv.store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if queued := s.PeekClientQueue(types.HostClientID, types.WSMessageStdin); len(queued) != 0 {
+		t.Errorf("expected empty host stdin queue, got %d entries", len(queued))
+	}
+}
+
+func TestStdinAsHostAllowedForHostIdentity(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/stdin?client_id=host", stdinBody(), types.HostClientID, types.AuthModeMTLS)
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201 for host submitting stdin, got %d", w.Code)
+	}
+}
+
+func TestStdinWithAnotherIdentitysClientForbidden(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+	reg := registerClientAuth(t, srv, sess.ID, "alice", types.AuthModeMTLS)
+	approveAuth(t, srv, sess.ID, reg.ClientID, types.PermissionReadWrite)
+
+	// Mallory knows alice's client ID and tries to use it.
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/stdin?client_id="+reg.ClientID, stdinBody(), "mallory", types.AuthModeMTLS)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for stdin with another identity's client, got %d", w.Code)
+	}
+
+	// Alice can use her own client.
+	w = serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/stdin?client_id="+reg.ClientID, stdinBody(), "alice", types.AuthModeMTLS)
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201 for stdin from owning identity, got %d", w.Code)
+	}
+}
+
+func TestStdinAsHostAllowedInNoneMode(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, "anonymous", types.AuthModeNone)
+
+	// In AuthModeNone, the host identity is not restricted.
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/stdin?client_id=host", stdinBody(), "anonymous", types.AuthModeNone)
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201 in none-mode, got %d", w.Code)
+	}
+}
+
+func TestPollAckAsHostBlockedForNonHostIdentity(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+
+	for _, op := range []string{"poll", "ack"} {
+		target := fmt.Sprintf("/sessions/%s/%d/%s?client_id=host", sess.ID, types.WSMessageStdin, op)
+		if w := serveWithAuth(t, srv, http.MethodGet, target, nil, "attacker", types.AuthModeMTLS); w.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403 for non-host acting as host, got %d", op, w.Code)
+		}
+		if w := serveWithAuth(t, srv, http.MethodGet, target, nil, types.HostClientID, types.AuthModeMTLS); w.Code != http.StatusOK {
+			t.Errorf("%s: expected 200 for host, got %d", op, w.Code)
+		}
+	}
+}
+
+func TestPollAckWithAnotherIdentitysClientForbidden(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+	reg := registerClientAuth(t, srv, sess.ID, "alice", types.AuthModeMTLS)
+	approveAuth(t, srv, sess.ID, reg.ClientID, types.PermissionReadOnly)
+
+	for _, op := range []string{"poll", "ack"} {
+		target := fmt.Sprintf("/sessions/%s/%d/%s?client_id=%s", sess.ID, types.WSMessageOutput, op, reg.ClientID)
+		if w := serveWithAuth(t, srv, http.MethodGet, target, nil, "mallory", types.AuthModeMTLS); w.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403 for another identity's client, got %d", op, w.Code)
+		}
+		if w := serveWithAuth(t, srv, http.MethodGet, target, nil, "alice", types.AuthModeMTLS); w.Code != http.StatusOK {
+			t.Errorf("%s: expected 200 for owning identity, got %d", op, w.Code)
+		}
+	}
+}
+
+func TestPollRequiresApproval(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+	reg := registerClientAuth(t, srv, sess.ID, "alice", types.AuthModeMTLS)
+	target := fmt.Sprintf("/sessions/%s/%d/poll?client_id=%s", sess.ID, types.WSMessageOutput, reg.ClientID)
+
+	if w := serveWithAuth(t, srv, http.MethodGet, target, nil, "alice", types.AuthModeMTLS); w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for pending client poll, got %d", w.Code)
+	}
+	approveAuth(t, srv, sess.ID, reg.ClientID, types.PermissionReadOnly)
+	if w := serveWithAuth(t, srv, http.MethodGet, target, nil, "alice", types.AuthModeMTLS); w.Code != http.StatusOK {
+		t.Errorf("expected 200 for approved client poll, got %d", w.Code)
+	}
+}
+
+func TestRegisterReuseBlockedForAnotherIdentity(t *testing.T) {
+	srv := newAuthTestServer(t)
+	sess := createSessionAuth(t, srv, types.HostClientID, types.AuthModeMTLS)
+	alice := registerClientAuth(t, srv, sess.ID, "alice", types.AuthModeMTLS)
+	approveAuth(t, srv, sess.ID, alice.ClientID, types.PermissionReadWrite)
+
+	// Mallory tries to take over alice's record by supplying its ID.
+	w := serveWithAuth(t, srv, http.MethodPost,
+		"/sessions/"+sess.ID+"/clients?client_id="+alice.ClientID, nil, "mallory", types.AuthModeMTLS)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var reg types.RegisterClientResponse
+	if err := json.NewDecoder(w.Body).Decode(&reg); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if reg.ClientID == alice.ClientID {
+		t.Error("expected a fresh client ID, got alice's")
+	}
+	if reg.Status != types.ApprovalPending {
+		t.Errorf("expected new record to be pending, got %s", reg.Status)
+	}
+
+	// Alice's record is untouched.
+	s, err := srv.store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if c := s.GetClient(alice.ClientID); c == nil || c.Owner() != "alice" || c.Info.Approval != types.ApprovalApproved {
+		t.Error("expected alice's record to keep its owner and approval")
 	}
 }

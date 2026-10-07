@@ -27,12 +27,12 @@ func TestConnectCycleDoesNotDuplicateClientRecord(t *testing.T) {
 	for range numConnects {
 		// HTTP pre-registration: no connection yet, always a fresh ID (a new
 		// client process, exactly like a real reconnect).
-		httpID, _ := sess.RegisterClient("", nil)
+		httpID, _ := sess.RegisterClient("", nil, "")
 		_ = sess.ApproveClient(httpID, types.PermissionReadWrite)
 
 		// WebSocket upgrade: identifies itself with the ID it just learned
 		// from the HTTP step, as the real client does.
-		sess.RegisterClient(httpID, nil)
+		sess.RegisterClient(httpID, nil, "")
 	}
 
 	if got := len(sess.clients); got != numConnects {

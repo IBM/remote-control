@@ -154,7 +154,7 @@ func (c *Client) pollOutput(ctx context.Context, sessionID string) {
 				continue
 			}
 
-			pollResp, err := c.api.Poll(sessionID, types.HostClientID, types.WSMessageOutput)
+			pollResp, err := c.api.Poll(sessionID, c.clientID, types.WSMessageOutput)
 			if err != nil {
 				continue
 			}
@@ -168,7 +168,7 @@ func (c *Client) pollOutput(ctx context.Context, sessionID string) {
 				}
 			}
 
-			if err := c.api.Ack(sessionID, types.HostClientID, types.WSMessageOutput); err != nil {
+			if err := c.api.Ack(sessionID, c.clientID, types.WSMessageOutput); err != nil {
 				ch.Log(alog.DEBUG, "[remote-control] poll ack error: %v", err)
 			}
 		}

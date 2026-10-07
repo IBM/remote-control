@@ -25,6 +25,11 @@ type SessionClient struct {
 	conn  *Connection
 	msgQs map[types.WSMessageType][]queuedMessage
 
+	// owner is the authenticated principal (e.g. mTLS certificate CN) that
+	// created this record. The host record is not owner-tracked; it is gated
+	// by the reserved HostClientID identity instead.
+	owner string
+
 	// maxQueueLength bounds how many not-yet-delivered messages Send will hold
 	// for this client (per message type). Without a bound, a client whose
 	// connection never succeeds (e.g. an abandoned or long-disconnected
@@ -32,6 +37,11 @@ type SessionClient struct {
 	// every failed Send call re-marshals the entire backlog. Zero or negative
 	// means unbounded; see config.Config.MaxClientQueueLength.
 	maxQueueLength int
+}
+
+// Owner returns the authenticated principal that owns this client record.
+func (c *SessionClient) Owner() string {
+	return c.owner
 }
 
 func newSessionClient(clientID string, approval types.ApprovalStatus, conn *websocket.Conn, maxQueueLength int) *SessionClient {
@@ -273,8 +283,10 @@ func (s *Session) Complete(exitCode int) {
 // client that pre-registered over HTTP before upgrading to a WebSocket, or a
 // client reconnecting after a disconnect). If clientID is HostClientID,
 // updates the host connection instead. Approval/permission state is preserved
-// across reuse.
-func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string, *SessionClient) {
+// across reuse. The owner (authenticated principal) is recorded so that the
+// record can be bound to the principal that created it; reuse only happens
+// when the caller's identity matches the existing record's owner.
+func (s *Session) RegisterClient(clientID string, conn *websocket.Conn, owner string) (string, *SessionClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -289,20 +301,25 @@ func (s *Session) RegisterClient(clientID string, conn *websocket.Conn) (string,
 		return types.HostClientID, s.hostConn
 	}
 
-	// Reuse an existing client record if the caller identified a known client
+	// Reuse an existing client record only if the caller's identity matches
+	// the record's owner. This prevents a caller who learns another client's
+	// UUID from taking over that record, including its approval and permission.
 	if clientID != "" {
 		if existing, ok := s.clients[clientID]; ok {
-			existing.mu.Lock()
-			existing.conn.Reconnect(conn)
-			existing.mu.Unlock()
-			existing.Info.JoinedAt = time.Now()
-			sessCh.Log(alog.DEBUG, "Reusing existing client record for %s", clientID)
-			return clientID, existing
+			if existing.owner == owner {
+				existing.mu.Lock()
+				existing.conn.Reconnect(conn)
+				existing.mu.Unlock()
+				existing.Info.JoinedAt = time.Now()
+				sessCh.Log(alog.DEBUG, "Reusing existing client record for %s", clientID)
+				return clientID, existing
+			}
 		}
 	}
 
 	client := uuid.New().String()
 	clientRec := newSessionClient(client, types.ApprovalPending, conn, s.maxClientQueueLength)
+	clientRec.owner = owner
 	s.clients[client] = clientRec
 
 	// If client approval required, notify the host of the pending client
