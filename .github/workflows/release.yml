@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
 
+permissions:
+  # Write permissions needed for release artifacts
+  contents: write
+
 jobs:
   build-release:
     name: Build Release Binaries
