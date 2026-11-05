@@ -34,11 +34,7 @@ func BuildServerTLSConfig(serverCertFile, serverKeyFile, clientCAFile string, au
 			clientCAs = pool
 			clientAuth = tls.RequireAndVerifyClientCert
 		} else {
-			// No client CA configured: fall back to system CAs.
-			clientCAs = loadCertPoolOrSystem(clientCAFile)
-			if clientCAs != nil {
-				clientAuth = tls.RequireAndVerifyClientCert
-			}
+			return nil, fmt.Errorf("No client CA provided with mTLS mode. Set one in server_tls.trusted_ca_file")
 		}
 
 	case types.AuthModeProxy:

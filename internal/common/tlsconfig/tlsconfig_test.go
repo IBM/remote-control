@@ -591,13 +591,13 @@ func TestBuildServerTLSConfigEmptyCAFileUsesSystemCAs(t *testing.T) {
 	caCert, caKey := generateCA(t, dir)
 	serverCert, serverKey := generateSigned(t, dir, "server", caCert, caKey)
 
-	// An empty clientCAFile is an explicit choice — should succeed (uses system CAs).
+	// An empty clientCAFile is an error — should fail (no system CA fallback)
 	tlsCfg, err := BuildServerTLSConfig(serverCert, serverKey, "", types.AuthModeMTLS)
-	if err != nil {
-		t.Fatalf("BuildServerTLSConfig error: %v", err)
+	if err == nil {
+		t.Fatal("BuildServerTLSConfig succeeded with unset client-CA in mTLS")
 	}
-	if tlsCfg == nil {
-		t.Fatal("expected non-nil TLS config")
+	if tlsCfg != nil {
+		t.Fatal("expected nil TLS config")
 	}
 }
 
