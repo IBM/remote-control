@@ -1,5 +1,7 @@
 github.com/IBM/alchemy-logging/src/go v1.0.3 h1:2QQ/I5cIoDfGooTEJzdzKZmWntHPIwNFIoo9ipFx0v4=
 github.com/IBM/alchemy-logging/src/go v1.0.3/go.mod h1:da1DJ0y3nkz/zKSyXGHkU8DC9lafh2S18W+KOvbqiFA=
+github.com/IBM/alchemy-logging/src/go v1.1.0 h1:WSwiKUpjRDyVNi6hYzeiJLLOqPBy/CzUn3I7cCFrZJc=
+github.com/IBM/alchemy-logging/src/go v1.1.0/go.mod h1:da1DJ0y3nkz/zKSyXGHkU8DC9lafh2S18W+KOvbqiFA=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
